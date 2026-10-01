@@ -1,0 +1,7 @@
+/target
+/tests-integration/.cache
+/tests-integration/out
+*.profraw
+fuzz/target
+fuzz/corpus
+fuzz/artifacts

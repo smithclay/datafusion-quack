@@ -1,0 +1,43 @@
+[package]
+name = "datafusion-quack"
+description = "Serve a DataFusion SessionContext over DuckDB's Quack protocol"
+readme = "../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+arrow-quack = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+datafusion = { workspace = true, features = ["sql", "nested_expressions"] }
+datafusion-quack-catalog = { workspace = true }
+futures = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+quack_protocol = { workspace = true }
+rand = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tower = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+datafusion = { workspace = true, features = ["sql", "nested_expressions", "string_expressions", "unicode_expressions", "datetime_expressions", "math_expressions"] }
+quack_protocol = { workspace = true, features = ["server"] }
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
