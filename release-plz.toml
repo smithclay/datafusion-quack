@@ -1,0 +1,30 @@
+# release-plz: independent crate versions, tags <crate>-v<version>, one CHANGELOG.md
+
+[workspace]
+changelog_update = true
+dependencies_update = false
+git_tag_name = "{{ package }}-v{{ version }}"
+git_release_name = "{{ package }} v{{ version }}"
+pr_labels = ["release"]
+# a release needs quack_protocol's `server` feature on crates.io first
+release_always = false
+
+[changelog]
+# one changelog at the repository root, so release notes aren't repeated per crate
+protect_breaking_commits = true
+
+[[package]]
+name = "arrow-quack"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "datafusion-quack-catalog"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "datafusion-quack"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "datafusion-quack-cli"
+changelog_path = "CHANGELOG.md"

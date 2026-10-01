@@ -19,6 +19,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "datafusion-quack"
 path = "src/main.rs"
+# the library crate datafusion-quack documents as the same name
+doc = false
 
 [dependencies]
 clap = { workspace = true }

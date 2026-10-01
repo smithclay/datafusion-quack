@@ -37,7 +37,6 @@ proptest = "1"
 quack_protocol = { path = "../../../../private/tmp/claude-501/-Users-clay-workspace-datafusion-quack/1124c835-2194-4f67-9961-6f9e82447944/scratchpad/qp", default-features = false, features = ["server"] }
 rand = "0.9"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-pemfile = "2"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "sync", "time", "signal"] }

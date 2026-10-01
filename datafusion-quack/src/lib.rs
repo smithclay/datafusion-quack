@@ -34,6 +34,11 @@
 //!
 //! [Quack protocol]: https://duckdb.org/docs/current/quack/overview
 
+/// The README's examples, compiled as doctests.
+#[doc = include_str!("../../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctests;
+
 mod auth;
 mod cursor;
 mod dispatch;
@@ -48,7 +53,7 @@ mod session;
 use std::future::Future;
 use std::sync::Arc;
 
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use tokio::net::TcpListener;
 
 pub use auth::{AuthProvider, ConnectionRequest, SessionInfo, TokenAuth};
@@ -60,6 +65,24 @@ pub use session::{SessionContextProvider, SharedSessionContextProvider};
 
 use dispatch::Dispatcher;
 use session::SessionStore;
+
+/// A `SessionConfig` laid out the way DuckDB clients expect: tables in catalog
+/// `memory`, schema `main` (DuckDB's names, so `ATTACH … AS df; FROM df.t` finds `t`),
+/// and DuckDB's SQL dialect.
+///
+/// ```
+/// use datafusion::prelude::SessionContext;
+///
+/// let ctx = SessionContext::new_with_config(datafusion_quack::duckdb_session_config());
+/// assert_eq!(ctx.state().config().options().catalog.default_schema, "main");
+/// ```
+pub fn duckdb_session_config() -> SessionConfig {
+    SessionConfig::new()
+        .with_default_catalog_and_schema("memory", "main")
+        .with_create_default_catalog_and_schema(true)
+        .with_information_schema(true)
+        .set_str("datafusion.sql_parser.dialect", "duckdb")
+}
 
 /// Serves `ctx` until the process stops.
 pub async fn serve(ctx: Arc<SessionContext>, options: &ServerOptions) -> Result<(), ServerError> {

@@ -16,6 +16,8 @@
 //! (`CALL quack_serve('quack:127.0.0.1:9494', token => 'golden-token')`) and
 //! `QUACK_GOLDEN_URI=http://127.0.0.1:9494/quack cargo test -p datafusion-quack --test wire -- --ignored`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::path::PathBuf;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -148,7 +150,7 @@ async fn responses_match_duckdb_byte_for_byte() {
     );
     let id = connection_id(&connected);
 
-    for index in 0..QUERIES.len() {
+    for (index, sql) in QUERIES.iter().enumerate() {
         let request = with_connection(&fixture(&format!("q{}.req", index + 1)), &id);
         let response = post(&http, &server.url, request).await;
         let expected = fixture(&format!("q{}.resp", index + 1));
@@ -166,8 +168,7 @@ async fn responses_match_duckdb_byte_for_byte() {
         assert_eq!(
             response,
             expected,
-            "{}: ours {:?}\nDuckDB {:?}",
-            QUERIES[index],
+            "{sql}: ours {:?}\nDuckDB {:?}",
             decode_request(&response),
             decode_request(&expected)
         );

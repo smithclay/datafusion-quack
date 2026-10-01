@@ -4,6 +4,8 @@
 //! server keeps serving. The proptest mutates real requests: bit flips, cuts and
 //! splices of the golden fixtures.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::path::PathBuf;
 
 use datafusion::prelude::SessionContext;

@@ -1,0 +1,58 @@
+name: Nightly
+
+# Catches upstream breakage (DataFusion, arrow, the DuckDB 2.0 alpha) and fuzzes
+# longer than the per-PR smoke run.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  latest-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo update
+      - run: cargo test --workspace --all-features
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: fuzz dispatch for 30 minutes
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/dispatch && cp seeds/dispatch/* corpus/dispatch/
+          cargo fuzz run dispatch -- -max_total_time=1800 -rss_limit_mb=4096
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+
+  integration-latest-duckdb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the latest DuckDB 2.0 alpha
+        run: |
+          echo "DUCKDB_STAGED=$(curl -fsS https://duckdb-staging.duckdb.org/latest_alpha_version.txt)" >> "$GITHUB_ENV"
+      - run: tests-integration/run.sh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-logs
+          path: tests-integration/out

@@ -1,5 +1,5 @@
 //! A server on a free port, for the integration tests.
-#![allow(dead_code)]
+#![allow(dead_code, clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
 use std::sync::Arc;
 

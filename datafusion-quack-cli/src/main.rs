@@ -18,9 +18,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::prelude::{
-    CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionConfig, SessionContext,
-};
+use datafusion::prelude::{CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext};
 use datafusion_quack::{QuackServer, ServerOptions};
 use datafusion_quack_cli::seed;
 use tracing_subscriber::EnvFilter;
@@ -122,10 +120,8 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    let config = SessionConfig::new()
-        .with_default_catalog_and_schema(&args.catalog, &args.schema)
-        .with_create_default_catalog_and_schema(true)
-        .with_information_schema(true);
+    let config = datafusion_quack::duckdb_session_config()
+        .with_default_catalog_and_schema(&args.catalog, &args.schema);
     let ctx = SessionContext::new_with_config(config);
     register_tables(&ctx, &args).await?;
 

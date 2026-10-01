@@ -30,7 +30,6 @@ hyper-util = { workspace = true }
 quack_protocol = { workspace = true }
 rand = { workspace = true }
 rustls = { workspace = true }
-rustls-pemfile = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

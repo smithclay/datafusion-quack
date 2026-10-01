@@ -1,5 +1,7 @@
 //! The server against the `quack_protocol` Rust client (milestone M3).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -84,8 +86,7 @@ async fn a_bad_token_is_rejected() {
     let server = TestServer::start(SessionContext::new(), options()).await;
     let error = QuackClient::connect(&server.uri, client_options("wrong-token"))
         .await
-        .err()
-        .expect("refused");
+        .expect_err("refused");
     assert!(
         error.to_string().contains("Authentication failed"),
         "{error}"

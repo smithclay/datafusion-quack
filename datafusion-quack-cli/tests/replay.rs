@@ -11,6 +11,8 @@
 //!
 //! To refresh a list, record a session and copy the PREPARE statements here.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};

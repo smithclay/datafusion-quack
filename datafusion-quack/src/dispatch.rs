@@ -385,7 +385,7 @@ fn parse(
         .with_dialect(dialect.as_ref())
         .build()
         .and_then(|mut parser| parser.parse_statements())
-        .map_err(|e| ClientError::from(datafusion::error::DataFusionError::from(e)))
+        .map_err(ClientError::from)
 }
 
 fn server_supports(message_type: MessageType) -> bool {

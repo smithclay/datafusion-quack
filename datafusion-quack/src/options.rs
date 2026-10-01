@@ -91,7 +91,7 @@ impl ServerOptions {
         self
     }
 
-    /// The most sessions open at once; further CONNECTIONs are refused. Default 1024;
+    /// The most sessions open at once; further connection requests are refused. Default 1024;
     /// `0` is unlimited.
     pub fn with_max_sessions(mut self, max_sessions: usize) -> Self {
         self.max_sessions = max_sessions;

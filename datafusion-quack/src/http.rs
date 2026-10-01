@@ -1,7 +1,6 @@
 //! The HTTP endpoint: `GET /`, `OPTIONS /quack` and `POST /quack`.
 
 use std::future::Future;
-use std::io::BufReader;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +13,8 @@ use axum::routing::get;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use hyper_util::service::TowerToHyperService;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
@@ -143,19 +144,14 @@ fn tls_acceptor(cert: &std::path::Path, key: &std::path::Path) -> Result<TlsAcce
     let tls_error = |what: &str, path: &std::path::Path, error: &dyn std::fmt::Display| {
         ServerError::Tls(format!("{what} {}: {error}", path.display()))
     };
-    let certs = rustls_pemfile::certs(&mut BufReader::new(
-        std::fs::File::open(cert).map_err(|e| tls_error("cannot open", cert, &e))?,
-    ))
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| tls_error("cannot read", cert, &e))?;
+    let certs = CertificateDer::pem_file_iter(cert)
+        .map_err(|e| tls_error("cannot read", cert, &e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| tls_error("cannot read", cert, &e))?;
     if certs.is_empty() {
         return Err(tls_error("no certificate in", cert, &"empty"));
     }
-    let key = rustls_pemfile::private_key(&mut BufReader::new(
-        std::fs::File::open(key).map_err(|e| tls_error("cannot open", key, &e))?,
-    ))
-    .map_err(|e| tls_error("cannot read", key, &e))?
-    .ok_or_else(|| tls_error("no private key in", key, &"empty"))?;
+    let key = PrivateKeyDer::from_pem_file(key).map_err(|e| tls_error("cannot read", key, &e))?;
 
     let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
