@@ -12,8 +12,6 @@
 //! FROM df.name;
 //! ```
 
-mod seed;
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +22,7 @@ use datafusion::prelude::{
     CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionConfig, SessionContext,
 };
 use datafusion_quack::{QuackServer, ServerOptions};
+use datafusion_quack_cli::seed;
 use tracing_subscriber::EnvFilter;
 
 /// Serve CSV, Parquet and JSON files to DuckDB clients over the Quack protocol.

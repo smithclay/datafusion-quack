@@ -147,7 +147,7 @@ async fn sessions_run_queries_concurrently() {
         let uri = server.uri.clone();
         tasks.push(tokio::spawn(async move {
             let client = QuackClient::connect(&uri, client_options(TOKEN)).await.unwrap();
-            let rows = values(&client, &format!("SELECT sum(value) + {i} FROM range(100000)")).await;
+            let rows = values(&client, &format!("SELECT CAST(sum(value) AS BIGINT) + {i} FROM range(100000)")).await;
             assert_eq!(rows, [[Value::Int(4_999_950_000 + i)]]);
         }));
     }

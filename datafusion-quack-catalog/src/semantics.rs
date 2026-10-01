@@ -13,11 +13,15 @@
 //! | `DATE - DATE` | interval | `BIGINT` (days) |
 //! | integer `//` integer | not supported | integer, truncated toward zero |
 //! | `avg(DECIMAL)` | `DECIMAL(p+4, s+4)` | `DOUBLE` |
-//! | `sum(integer)` | same integer type, wraps on overflow | `HUGEINT`; here `DECIMAL(38,0)` |
 //!
 //! These are DuckDB's semantics, not DataFusion's, so they belong only in sessions
 //! of DuckDB clients. A DataFusion client (the Quack table provider) plans with
 //! DataFusion's rules and expects its pushed-down SQL to keep them.
+//!
+//! One rule applies to every session ([`wide_sum_udaf`]): `sum` of integers returns
+//! `DECIMAL(38,0)`, as DuckDB returns `HUGEINT`, rather than wrapping on overflow. A
+//! client that expects a narrower type (the table provider casts results to its plan's
+//! types) then gets an error instead of a wrong sum.
 
 use std::sync::Arc;
 
@@ -45,30 +49,34 @@ pub fn duckdb_client_semantics(state: SessionState) -> Result<SessionState> {
         .build())
 }
 
-/// Plans `/` and date arithmetic, and picks DuckDB's `avg` and `sum`.
+/// `sum` whose integer arguments are summed as `DECIMAL(38,0)`, so the sum can't wrap.
+pub fn wide_sum_udaf(sum: Arc<AggregateUDF>) -> AggregateUDF {
+    coerced(sum, |t| t.is_integer().then_some(DataType::Decimal128(38, 0)))
+}
+
+fn coerced(inner: Arc<AggregateUDF>, coerce: fn(&DataType) -> Option<DataType>) -> AggregateUDF {
+    AggregateUDF::new_from_impl(Coerced {
+        inner,
+        signature: Signature::user_defined(Volatility::Immutable),
+        coerce,
+    })
+}
+
+/// Plans `/` and date arithmetic, and picks DuckDB's `avg`.
 #[derive(Debug)]
 pub struct DuckDbExprPlanner {
     avg: Option<Arc<AggregateUDF>>,
-    sum: Option<Arc<AggregateUDF>>,
     to_days: Option<Arc<datafusion::logical_expr::ScalarUDF>>,
 }
 
 impl DuckDbExprPlanner {
-    /// A planner using `state`'s `avg`, `sum` and `to_days`.
+    /// A planner using `state`'s `avg` and `to_days`.
     pub fn new(state: &SessionState) -> Self {
-        let aggregate = |name: &str, coerce: fn(&DataType) -> Option<DataType>| {
-            state.aggregate_functions().get(name).map(|inner| {
-                Arc::new(AggregateUDF::new_from_impl(Coerced {
-                    inner: Arc::clone(inner),
-                    signature: Signature::user_defined(Volatility::Immutable),
-                    coerce,
-                }))
-            })
-        };
         Self {
-            avg: aggregate("avg", |t| is_decimal(t).then_some(DataType::Float64)),
-            sum: aggregate("sum", |t| {
-                t.is_integer().then_some(DataType::Decimal128(38, 0))
+            avg: state.aggregate_functions().get("avg").map(|inner| {
+                Arc::new(coerced(Arc::clone(inner), |t| {
+                    is_decimal(t).then_some(DataType::Float64)
+                }))
             }),
             to_days: state.scalar_functions().get("to_days").cloned(),
         }
@@ -157,13 +165,8 @@ impl ExprPlanner for DuckDbExprPlanner {
     }
 
     fn plan_aggregate(&self, mut expr: RawAggregateExpr) -> Result<PlannerResult<RawAggregateExpr>> {
-        let replacement = match expr.func.name() {
-            "avg" => &self.avg,
-            "sum" => &self.sum,
-            _ => &None,
-        };
-        if let Some(replacement) = replacement {
-            expr.func = Arc::clone(replacement);
+        if let (Some(avg), "avg") = (&self.avg, expr.func.name()) {
+            expr.func = Arc::clone(avg);
         }
         Ok(PlannerResult::Original(expr))
     }

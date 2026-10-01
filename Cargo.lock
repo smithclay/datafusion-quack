@@ -1653,6 +1653,8 @@ dependencies = [
  "clap",
  "datafusion",
  "datafusion-quack",
+ "futures",
+ "quack_protocol",
  "tokio",
  "tracing",
  "tracing-subscriber",
