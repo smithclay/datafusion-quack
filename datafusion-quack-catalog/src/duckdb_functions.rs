@@ -22,8 +22,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::execution::session_state::SessionState;
 use datafusion::logical_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion::logical_expr::{
-    ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    AggregateUDF, ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility, WindowUDF,
 };
 use datafusion::physical_expr_common::datum::apply;
 
@@ -74,32 +74,135 @@ pub(crate) fn register(state: &mut SessionState) -> Result<()> {
 }
 
 fn register_system_aliases(state: &mut SessionState) -> Result<()> {
-    let scalars: HashMap<String, Arc<ScalarUDF>> = state
-        .scalar_functions()
-        .values()
-        .map(|udf| (udf.name().to_string(), Arc::clone(udf)))
-        .collect();
-    for (name, udf) in scalars {
-        let aliases = system_aliases(&name).map(intern);
-        state.register_udf(Arc::new(udf.as_ref().clone().with_aliases(aliases)))?;
+    let scalars = state.scalar_functions().clone();
+    with_system_aliases(
+        &scalars,
+        ScalarUDF::name,
+        ScalarUDF::aliases,
+        |udf, system| {
+            let udf = match system {
+                Some(aliases) => Arc::new(udf.as_ref().clone().with_aliases(aliases)),
+                None => Arc::clone(udf),
+            };
+            state.register_udf(udf).map(drop)
+        },
+    )?;
+    check_unchanged(&scalars, state.scalar_functions(), ScalarUDF::name)?;
+
+    let aggregates = state.aggregate_functions().clone();
+    with_system_aliases(
+        &aggregates,
+        AggregateUDF::name,
+        AggregateUDF::aliases,
+        |udaf, system| {
+            let udaf = match system {
+                Some(aliases) => Arc::new(udaf.as_ref().clone().with_aliases(aliases)),
+                None => Arc::clone(udaf),
+            };
+            state.register_udaf(udaf).map(drop)
+        },
+    )?;
+    check_unchanged(&aggregates, state.aggregate_functions(), AggregateUDF::name)?;
+
+    let windows = state.window_functions().clone();
+    with_system_aliases(
+        &windows,
+        WindowUDF::name,
+        WindowUDF::aliases,
+        |udwf, system| {
+            let udwf = match system {
+                Some(aliases) => Arc::new(udwf.as_ref().clone().with_aliases(aliases)),
+                None => Arc::clone(udwf),
+            };
+            state.register_udwf(udwf).map(drop)
+        },
+    )?;
+    check_unchanged(&windows, state.window_functions(), WindowUDF::name)
+}
+
+/// Re-registers every function of `registry` (keyed by names and aliases) through
+/// `register`, passing the `"system".main.` aliases for the function that owns its
+/// name.
+///
+/// Registering a function claims its name and all its aliases again, and an alias may
+/// belong to another function now: DataFusion's `character_length` lists `length`,
+/// which DuckDB's `length` replaced. So the functions are registered in an order where
+/// each key's owner comes after every other function that claims it. The registry was
+/// built by registering one function after another, so such an order exists.
+fn with_system_aliases<F: ?Sized>(
+    registry: &HashMap<String, Arc<F>>,
+    name: impl Fn(&F) -> &str,
+    aliases: impl Fn(&F) -> &[String],
+    mut register: impl FnMut(&Arc<F>, Option<[&'static str; 2]>) -> Result<()>,
+) -> Result<()> {
+    // the distinct functions, in a fixed order
+    let mut functions: Vec<&Arc<F>> = Vec::new();
+    for function in registry.values() {
+        if !functions.iter().any(|f| Arc::ptr_eq(f, function)) {
+            functions.push(function);
+        }
     }
-    let aggregates: HashMap<String, _> = state
-        .aggregate_functions()
-        .values()
-        .map(|udaf| (udaf.name().to_string(), Arc::clone(udaf)))
-        .collect();
-    for (name, udaf) in aggregates {
-        let aliases = system_aliases(&name).map(intern);
-        state.register_udaf(Arc::new(udaf.as_ref().clone().with_aliases(aliases)))?;
+    functions.sort_by(|a, b| name(a).cmp(name(b)));
+    let index = |function: &Arc<F>| functions.iter().position(|f| Arc::ptr_eq(f, function));
+
+    // claimer -> owner: the owner must be registered after the claimer
+    let mut after: Vec<Vec<usize>> = vec![Vec::new(); functions.len()];
+    let mut waiting_on = vec![0usize; functions.len()];
+    for (claimer, function) in functions.iter().enumerate() {
+        let claims =
+            std::iter::once(name(function)).chain(aliases(function).iter().map(String::as_str));
+        for key in claims {
+            if let Some(owner) = registry.get(key).and_then(&index)
+                && owner != claimer
+                && !after[claimer].contains(&owner)
+            {
+                after[claimer].push(owner);
+                waiting_on[owner] += 1;
+            }
+        }
     }
-    let windows: HashMap<String, _> = state
-        .window_functions()
-        .values()
-        .map(|udwf| (udwf.name().to_string(), Arc::clone(udwf)))
+
+    let mut ready: std::collections::BTreeSet<usize> = (0..functions.len())
+        .filter(|&i| waiting_on[i] == 0)
         .collect();
-    for (name, udwf) in windows {
-        let aliases = system_aliases(&name).map(intern);
-        state.register_udwf(Arc::new(udwf.as_ref().clone().with_aliases(aliases)))?;
+    let mut registered = 0;
+    while let Some(next) = ready.pop_first() {
+        let function = functions[next];
+        let owns_name = registry
+            .get(name(function))
+            .is_some_and(|owner| Arc::ptr_eq(owner, function));
+        let system = owns_name.then(|| system_aliases(name(function)).map(intern));
+        register(function, system)?;
+        registered += 1;
+        for &owner in &after[next] {
+            waiting_on[owner] -= 1;
+            if waiting_on[owner] == 0 {
+                ready.insert(owner);
+            }
+        }
+    }
+    if registered != functions.len() {
+        return datafusion::common::internal_err!(
+            "function names and aliases claim each other in a cycle"
+        );
+    }
+    Ok(())
+}
+
+/// Fails unless every name and alias of `before` still resolves to the same function.
+fn check_unchanged<F: ?Sized>(
+    before: &HashMap<String, Arc<F>>,
+    after: &HashMap<String, Arc<F>>,
+    name: impl Fn(&F) -> &str,
+) -> Result<()> {
+    for (key, function) in before {
+        let now = after.get(key).map(|f| name(f));
+        if now != Some(name(function)) {
+            return datafusion::common::internal_err!(
+                "registering system aliases moved '{key}' from {} to {now:?}",
+                name(function)
+            );
+        }
     }
     Ok(())
 }
@@ -280,6 +383,24 @@ mod tests {
     async fn value(ctx: &SessionContext, sql: &str) -> String {
         let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         arrow::util::display::array_value_to_string(batches[0].column(0), 0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn system_aliases_leave_every_name_with_its_function() {
+        // HashMap order changes from state to state: check many
+        for _ in 0..40 {
+            let ctx = SessionContext::new_with_state(
+                crate::duckdb_session_state(SessionContext::new().state()).unwrap(),
+            );
+            // DuckDB's length counts list elements; character_length also answers
+            // to `length`, and must not take the name back
+            assert_eq!(value(&ctx, "SELECT length([1, 2, 3])").await, "3");
+            assert_eq!(
+                value(&ctx, r#"SELECT "system".main.length([1, 2])"#).await,
+                "2"
+            );
+            assert_eq!(value(&ctx, "SELECT char_length('abcd')").await, "4");
+        }
     }
 
     #[tokio::test]
