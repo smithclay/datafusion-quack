@@ -13,9 +13,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use arrow::array::{Array, ArrayRef, AsArray, IntervalMonthDayNanoBuilder};
+use arrow::array::{ArrayRef, AsArray, IntervalMonthDayNanoBuilder};
 use arrow::compute::kernels::numeric;
-use arrow::datatypes::{DataType, Float64Type, Int64Type, IntervalMonthDayNano, IntervalUnit};
+use arrow::datatypes::{DataType, Float64Type, IntervalMonthDayNano, IntervalUnit};
 use datafusion::common::{ScalarValue, exec_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
@@ -167,76 +167,61 @@ impl ScalarUDFImpl for OperatorFunction {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct IntervalConstructor {
     name: &'static str,
-    unit: TimeUnit,
+    field: IntervalField,
+    /// Units of `field` in one of the function's units.
+    factor: u64,
     signature: Signature,
 }
 
+/// The interval field a unit counts in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum TimeUnit {
-    Millennia,
-    Centuries,
-    Decades,
-    Years,
-    Quarters,
+enum IntervalField {
     Months,
-    Weeks,
     Days,
-    Hours,
-    Minutes,
-    Seconds,
-    Milliseconds,
-    Microseconds,
+    Micros,
 }
 
 impl IntervalConstructor {
-    fn new(name: &'static str, unit: TimeUnit) -> Self {
-        Self {
-            name,
-            unit,
-            signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
-        }
-    }
-
     fn all() -> Vec<Self> {
-        vec![
-            Self::new("to_millennia", TimeUnit::Millennia),
-            Self::new("to_centuries", TimeUnit::Centuries),
-            Self::new("to_decades", TimeUnit::Decades),
-            Self::new("to_years", TimeUnit::Years),
-            Self::new("to_quarters", TimeUnit::Quarters),
-            Self::new("to_months", TimeUnit::Months),
-            Self::new("to_weeks", TimeUnit::Weeks),
-            Self::new("to_days", TimeUnit::Days),
-            Self::new("to_hours", TimeUnit::Hours),
-            Self::new("to_minutes", TimeUnit::Minutes),
-            Self::new("to_seconds", TimeUnit::Seconds),
-            Self::new("to_milliseconds", TimeUnit::Milliseconds),
-            Self::new("to_microseconds", TimeUnit::Microseconds),
+        use IntervalField::*;
+        [
+            ("to_millennia", Months, 12_000),
+            ("to_centuries", Months, 1_200),
+            ("to_decades", Months, 120),
+            ("to_years", Months, 12),
+            ("to_quarters", Months, 3),
+            ("to_months", Months, 1),
+            ("to_weeks", Days, 7),
+            ("to_days", Days, 1),
+            ("to_hours", Micros, 3_600_000_000),
+            ("to_minutes", Micros, 60_000_000),
+            ("to_seconds", Micros, 1_000_000),
+            ("to_milliseconds", Micros, 1_000),
+            ("to_microseconds", Micros, 1),
         ]
+        .into_iter()
+        .map(|(name, field, factor)| Self {
+            name,
+            field,
+            factor,
+            signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
+        })
+        .collect()
     }
 
-    /// The interval of `n` units. Fractional seconds and milliseconds keep their
-    /// microseconds, as DuckDB's do.
+    /// The interval of `n` units. Months and days must come out whole; microseconds
+    /// round, so fractional seconds keep their microseconds, as DuckDB's do.
     fn interval(&self, n: f64) -> Option<IntervalMonthDayNano> {
-        let whole = |n: f64| (n.fract() == 0.0 && n.abs() < 2e9).then_some(n as i32);
-        let micros = |factor: f64| {
-            let micros = (n * factor).round();
-            (micros.abs() < 9.2e18).then(|| micros as i64 * 1_000)
-        };
-        Some(match self.unit {
-            TimeUnit::Millennia => IntervalMonthDayNano::new(whole(n * 12_000.0)?, 0, 0),
-            TimeUnit::Centuries => IntervalMonthDayNano::new(whole(n * 1_200.0)?, 0, 0),
-            TimeUnit::Decades => IntervalMonthDayNano::new(whole(n * 120.0)?, 0, 0),
-            TimeUnit::Years => IntervalMonthDayNano::new(whole(n * 12.0)?, 0, 0),
-            TimeUnit::Quarters => IntervalMonthDayNano::new(whole(n * 3.0)?, 0, 0),
-            TimeUnit::Months => IntervalMonthDayNano::new(whole(n)?, 0, 0),
-            TimeUnit::Weeks => IntervalMonthDayNano::new(0, whole(n * 7.0)?, 0),
-            TimeUnit::Days => IntervalMonthDayNano::new(0, whole(n)?, 0),
-            TimeUnit::Hours => IntervalMonthDayNano::new(0, 0, micros(3_600_000_000.0)?),
-            TimeUnit::Minutes => IntervalMonthDayNano::new(0, 0, micros(60_000_000.0)?),
-            TimeUnit::Seconds => IntervalMonthDayNano::new(0, 0, micros(1_000_000.0)?),
-            TimeUnit::Milliseconds => IntervalMonthDayNano::new(0, 0, micros(1_000.0)?),
-            TimeUnit::Microseconds => IntervalMonthDayNano::new(0, 0, micros(1.0)?),
+        let units = n * self.factor as f64;
+        let whole = (units.fract() == 0.0 && units.abs() < 2e9).then_some(units as i32);
+        Some(match self.field {
+            IntervalField::Months => IntervalMonthDayNano::new(whole?, 0, 0),
+            IntervalField::Days => IntervalMonthDayNano::new(0, whole?, 0),
+            IntervalField::Micros => {
+                let micros = units.round();
+                (micros.abs() < 9.2e15).then_some(())?;
+                IntervalMonthDayNano::new(0, 0, micros as i64 * 1_000)
+            }
         })
     }
 }
@@ -265,19 +250,10 @@ impl ScalarUDFImpl for IntervalConstructor {
         };
         let scalar = matches!(arg, ColumnarValue::Scalar(_));
         let array = arg.to_array(if scalar { 1 } else { args.number_rows })?;
-        let values: Vec<Option<f64>> = if array.data_type().is_integer() {
-            let array = arrow::compute::cast(&array, &DataType::Int64)?;
-            array
-                .as_primitive::<Int64Type>()
-                .iter()
-                .map(|v| v.map(|v| v as f64))
-                .collect()
-        } else {
-            let array = arrow::compute::cast(&array, &DataType::Float64)?;
-            array.as_primitive::<Float64Type>().iter().collect()
-        };
+        let values = arrow::compute::cast(&array, &DataType::Float64)?;
+        let values = values.as_primitive::<Float64Type>();
         let mut builder = IntervalMonthDayNanoBuilder::with_capacity(values.len());
-        for value in values {
+        for value in values.iter() {
             match value {
                 None => builder.append_null(),
                 Some(n) => match self.interval(n) {

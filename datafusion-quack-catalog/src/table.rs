@@ -14,9 +14,10 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::future::BoxFuture;
 
-type Compute = Arc<dyn Fn() -> BoxFuture<'static, Result<RecordBatch>> + Send + Sync>;
+type Compute = Arc<dyn Fn(SchemaRef) -> BoxFuture<'static, Result<RecordBatch>> + Send + Sync>;
 
-/// A read-only table computed at scan time, e.g. from the catalog.
+/// A read-only table computed at scan time, e.g. from the catalog. `compute` gets the
+/// table's schema and returns all its rows.
 pub(crate) struct ComputedTable {
     name: &'static str,
     schema: SchemaRef,
@@ -35,7 +36,7 @@ impl ComputedTable {
     pub(crate) fn new(
         name: &'static str,
         schema: SchemaRef,
-        compute: impl Fn() -> BoxFuture<'static, Result<RecordBatch>> + Send + Sync + 'static,
+        compute: impl Fn(SchemaRef) -> BoxFuture<'static, Result<RecordBatch>> + Send + Sync + 'static,
     ) -> Self {
         Self {
             name,
@@ -62,7 +63,7 @@ impl TableProvider for ComputedTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batch = (self.compute)().await?;
+        let batch = (self.compute)(Arc::clone(&self.schema)).await?;
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![batch]],
             Arc::clone(&self.schema),

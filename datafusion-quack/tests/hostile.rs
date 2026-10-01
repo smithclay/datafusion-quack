@@ -19,14 +19,7 @@ mod common;
 use common::*;
 
 async fn post(server: &TestServer, body: Vec<u8>) -> QuackMessage {
-    let response = reqwest::Client::new()
-        .post(&server.url)
-        .body(body)
-        .send()
-        .await
-        .expect("an answer");
-    assert_eq!(response.status(), 200);
-    let bytes = response.bytes().await.unwrap();
+    let bytes = post_bytes(&server.url, body).await;
     let message = decode_request(&bytes).expect("a well-formed response");
     // the dispatcher turns a panic into this error; any panic is a bug
     if let QuackMessage::ErrorResponse { message, .. } = &message {
@@ -70,10 +63,7 @@ fn prepare(connection_id: &str, sql: &str) -> Vec<u8> {
 }
 
 async fn open_session(server: &TestServer) -> String {
-    match post(server, connect()).await {
-        QuackMessage::ConnectionResponse { header, .. } => header.connection_id.unwrap(),
-        other => panic!("{other:?}"),
-    }
+    connection_id(&post_bytes(&server.url, connect()).await)
 }
 
 /// A header for `message_type` on `connection_id`, then `body` as raw bytes.

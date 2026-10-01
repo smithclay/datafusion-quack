@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{RecordBatch, StringBuilder, UInt64Builder};
+use arrow::array::{RecordBatch, StringBuilder, UInt64Builder, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::information_schema::InformationSchemaProvider;
@@ -79,13 +79,14 @@ fn columns_schema() -> SchemaRef {
 }
 
 fn columns_table(list: Arc<dyn CatalogProviderList>) -> ComputedTable {
-    let schema = columns_schema();
-    let batch_schema = Arc::clone(&schema);
-    ComputedTable::new("information_schema.columns", schema, move || {
-        let list = Arc::clone(&list);
-        let schema = Arc::clone(&batch_schema);
-        Box::pin(async move { columns(list.as_ref(), schema).await })
-    })
+    ComputedTable::new(
+        "information_schema.columns",
+        columns_schema(),
+        move |schema| {
+            let list = Arc::clone(&list);
+            Box::pin(async move { columns(list.as_ref(), schema).await })
+        },
+    )
 }
 
 async fn columns(list: &dyn CatalogProviderList, schema: SchemaRef) -> Result<RecordBatch> {
@@ -94,17 +95,13 @@ async fn columns(list: &dyn CatalogProviderList, schema: SchemaRef) -> Result<Re
     let mut tables = StringBuilder::new();
     let mut names = StringBuilder::new();
     let mut positions = UInt64Builder::new();
-    let mut defaults = StringBuilder::new();
     let mut nullable = StringBuilder::new();
     let mut types = StringBuilder::new();
-    let mut char_lengths = UInt64Builder::new();
-    let mut octet_lengths = UInt64Builder::new();
     let mut precisions = UInt64Builder::new();
     let mut radixes = UInt64Builder::new();
     let mut scales = UInt64Builder::new();
-    let mut datetime_precisions = UInt64Builder::new();
-    let mut interval_types = StringBuilder::new();
 
+    let mut rows = 0;
     for table in walk::tables(list).await? {
         for (index, field) in table.provider.schema().fields().iter().enumerate() {
             catalogs.append_value(&table.catalog);
@@ -112,17 +109,13 @@ async fn columns(list: &dyn CatalogProviderList, schema: SchemaRef) -> Result<Re
             tables.append_value(&table.name);
             names.append_value(field.name());
             positions.append_value(index as u64 + 1);
-            defaults.append_null();
+            rows += 1;
             nullable.append_value(if field.is_nullable() { "YES" } else { "NO" });
             types.append_value(column_type_name(field));
-            char_lengths.append_null();
-            octet_lengths.append_null();
             let (precision, radix, scale) = numeric_precision(field.data_type());
             precisions.append_option(precision);
             radixes.append_option(radix);
             scales.append_option(scale);
-            datetime_precisions.append_null();
-            interval_types.append_null();
         }
     }
     Ok(RecordBatch::try_new(
@@ -133,16 +126,16 @@ async fn columns(list: &dyn CatalogProviderList, schema: SchemaRef) -> Result<Re
             Arc::new(tables.finish()),
             Arc::new(names.finish()),
             Arc::new(positions.finish()),
-            Arc::new(defaults.finish()),
+            new_null_array(&DataType::Utf8, rows),
             Arc::new(nullable.finish()),
             Arc::new(types.finish()),
-            Arc::new(char_lengths.finish()),
-            Arc::new(octet_lengths.finish()),
+            new_null_array(&DataType::UInt64, rows),
+            new_null_array(&DataType::UInt64, rows),
             Arc::new(precisions.finish()),
             Arc::new(radixes.finish()),
             Arc::new(scales.finish()),
-            Arc::new(datetime_precisions.finish()),
-            Arc::new(interval_types.finish()),
+            new_null_array(&DataType::UInt64, rows),
+            new_null_array(&DataType::Utf8, rows),
         ],
     )?)
 }

@@ -19,7 +19,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::TableReference;
 use datafusion::datasource::MemTable;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::SessionContext;
 use datafusion_quack::{QuackServer, ServerOptions};
 use datafusion_quack_cli::seed::{Seed, load};
 use futures::TryStreamExt;
@@ -263,10 +263,7 @@ fn type_matrix() -> MemTable {
 }
 
 async fn server() -> (String, tokio::task::JoinHandle<()>) {
-    let config = SessionConfig::new()
-        .with_default_catalog_and_schema("memory", "main")
-        .with_create_default_catalog_and_schema(true);
-    let ctx = SessionContext::new_with_config(config);
+    let ctx = SessionContext::new_with_config(datafusion_quack::duckdb_session_config());
     load(&ctx, Seed::ProviderFixtures).await.unwrap();
     for statement in TPCH_SCHEMA.split(';').filter(|s| !s.trim().is_empty()) {
         ctx.sql(statement).await.unwrap().collect().await.unwrap();

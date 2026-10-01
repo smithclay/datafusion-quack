@@ -82,11 +82,11 @@ impl BatchProducer {
         let mut bytes = 0;
         while bytes < self.target_bytes {
             if self.cancel.is_cancelled() {
-                return Err(cancelled());
+                return Err(ClientError::cancelled());
             }
             let next = tokio::select! {
                 biased;
-                () = self.cancel.cancelled() => return Err(cancelled()),
+                () = self.cancel.cancelled() => return Err(ClientError::cancelled()),
                 next = self.stream.next() => next,
             };
             let Some(record_batch) = next else { break };
@@ -101,17 +101,15 @@ impl BatchProducer {
     }
 }
 
-fn cancelled() -> ClientError {
-    ClientError::interrupted("query was cancelled")
-}
-
-enum End {
+/// Where the rest of the result comes from.
+enum Source {
+    Running(BatchProducer),
     Finished,
     Failed(ClientError),
 }
 
 struct CursorState {
-    producer: Option<BatchProducer>,
+    source: Source,
     /// Batches produced so far, inline ones included (dense indices 1..=produced).
     produced: u64,
     /// The highest dense index the client has acknowledged.
@@ -120,7 +118,6 @@ struct CursorState {
     ready: BTreeMap<u64, Batch>,
     /// Served FETCH responses, kept for a retry until acknowledged.
     served: BTreeMap<u64, Bytes>,
-    end: Option<End>,
 }
 
 /// A result being fetched.
@@ -142,19 +139,17 @@ impl Cursor {
         max_inflight_batches: u64,
         cancel: CancelHandle,
     ) -> Self {
-        let end = producer.is_none().then_some(End::Finished);
         Self {
             prepare_batches,
             max_inflight_batches,
             cancel,
             last_activity: Mutex::new(Instant::now()),
             state: tokio::sync::Mutex::new(CursorState {
-                producer,
+                source: producer.map_or(Source::Finished, Source::Running),
                 produced: prepare_batches,
                 acked: prepare_batches,
                 ready: BTreeMap::new(),
                 served: BTreeMap::new(),
-                end,
             }),
         }
     }
@@ -211,16 +206,16 @@ impl Cursor {
                 "Batch {batch_index} was already acknowledged"
             )));
         }
-        if state.end.is_none() && dense - state.acked > self.max_inflight_batches {
+        let running = matches!(state.source, Source::Running(_));
+        if running && dense - state.acked > self.max_inflight_batches {
             return Err(ClientError::invalid_input(format!(
                 "FETCH of batch {batch_index} is more than {} batches past the last acknowledged one",
                 self.max_inflight_batches
             )));
         }
 
-        while state.produced < dense && state.end.is_none() {
-            let Some(producer) = state.producer.as_mut() else {
-                state.end = Some(End::Finished);
+        while state.produced < dense {
+            let Source::Running(producer) = &mut state.source else {
                 break;
             };
             match producer.next().await {
@@ -233,19 +228,13 @@ impl Cursor {
                     }
                     state.ready.insert(index, batch);
                 }
-                Ok(None) => {
-                    state.producer = None;
-                    state.end = Some(End::Finished);
-                }
-                Err(error) => {
-                    state.producer = None;
-                    state.end = Some(End::Failed(error));
-                }
+                Ok(None) => state.source = Source::Finished,
+                Err(error) => state.source = Source::Failed(error),
             }
         }
         self.touch();
-        match &state.end {
-            Some(End::Failed(error)) => Err(error.clone()),
+        match &state.source {
+            Source::Failed(error) => Err(error.clone()),
             _ => {
                 // the stream ended below this index
                 let total = state.produced - self.prepare_batches;

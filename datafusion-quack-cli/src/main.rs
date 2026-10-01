@@ -76,21 +76,22 @@ struct Args {
     #[arg(long, default_value = "main")]
     schema: String,
 
-    /// The most sessions open at once (0 = unlimited).
-    #[arg(long, default_value_t = 1024)]
-    max_sessions: usize,
+    /// The most sessions open at once (0 = unlimited) [default: 1024].
+    #[arg(long)]
+    max_sessions: Option<usize>,
 
-    /// The longest heartbeat timeout a client may ask for, in seconds.
-    #[arg(long, default_value_t = 300)]
-    heartbeat_max: u64,
+    /// The longest heartbeat timeout a client may ask for, in seconds [default: 300].
+    #[arg(long)]
+    heartbeat_max: Option<u64>,
 
-    /// How long an unread result stays open, in seconds (0 = until its session ends).
-    #[arg(long, default_value_t = 300)]
-    result_ttl: u64,
+    /// How long an unread result stays open, in seconds (0 = until its session ends)
+    /// [default: 300].
+    #[arg(long)]
+    result_ttl: Option<u64>,
 
-    /// Rows a PREPARE response carries before the client must FETCH.
-    #[arg(long, default_value_t = 24_576)]
-    inline_rows: u64,
+    /// Rows a PREPARE response carries before the client must FETCH [default: 24576].
+    #[arg(long)]
+    inline_rows: Option<u64>,
 }
 
 fn table_arg(value: &str) -> std::result::Result<(String, String), String> {
@@ -125,13 +126,20 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let ctx = SessionContext::new_with_config(config);
     register_tables(&ctx, &args).await?;
 
-    let mut options = ServerOptions::new()
-        .with_host(&args.host)
-        .with_port(args.port)
-        .with_max_sessions(args.max_sessions)
-        .with_heartbeat_max(Duration::from_secs(args.heartbeat_max))
-        .with_result_ttl(Duration::from_secs(args.result_ttl))
-        .with_inline_rows(args.inline_rows);
+    // the listener below is bound here, so host and port aren't options
+    let mut options = ServerOptions::new();
+    if let Some(max_sessions) = args.max_sessions {
+        options = options.with_max_sessions(max_sessions);
+    }
+    if let Some(seconds) = args.heartbeat_max {
+        options = options.with_heartbeat_max(Duration::from_secs(seconds));
+    }
+    if let Some(seconds) = args.result_ttl {
+        options = options.with_result_ttl(Duration::from_secs(seconds));
+    }
+    if let Some(rows) = args.inline_rows {
+        options = options.with_inline_rows(rows);
+    }
     if let Some(token) = &args.token {
         options = options.with_token(token);
     }
@@ -156,16 +164,14 @@ async fn register_tables(ctx: &SessionContext, args: &Args) -> Result<()> {
     for seed in &args.seed {
         seed::load(ctx, *seed).await?;
     }
-    for (name, path) in &args.csv {
-        ctx.register_csv(name, path, CsvReadOptions::new()).await?;
-    }
-    for (name, path) in &args.parquet {
-        ctx.register_parquet(name, path, ParquetReadOptions::default())
-            .await?;
-    }
-    for (name, path) in &args.json {
-        ctx.register_json(name, path, JsonReadOptions::default())
-            .await?;
+    for (extension, tables) in [
+        ("csv", &args.csv),
+        ("parquet", &args.parquet),
+        ("json", &args.json),
+    ] {
+        for (name, path) in tables {
+            register_file(ctx, extension, name, path).await?;
+        }
     }
     for dir in &args.dir {
         register_dir(ctx, dir).await?;
@@ -186,23 +192,40 @@ async fn register_dir(ctx: &SessionContext, dir: &Path) -> Result<()> {
         ) else {
             continue;
         };
-        let location = path.to_string_lossy();
-        match extension.to_ascii_lowercase().as_str() {
-            "csv" => {
-                ctx.register_csv(stem, &location, CsvReadOptions::new())
-                    .await?
-            }
-            "parquet" => {
-                ctx.register_parquet(stem, &location, ParquetReadOptions::default())
-                    .await?
-            }
-            "json" | "ndjson" => {
-                let options = JsonReadOptions::default().file_extension(extension);
-                ctx.register_json(stem, &location, options).await?
-            }
-            _ => continue,
+        if register_file(
+            ctx,
+            &extension.to_ascii_lowercase(),
+            stem,
+            &path.to_string_lossy(),
+        )
+        .await?
+        {
+            tracing::info!(table = stem, path = %path.display(), "registered");
         }
-        tracing::info!(table = stem, path = %path.display(), "registered");
     }
     Ok(())
+}
+
+/// Registers the file at `path` as table `name`, read by its `extension`: csv, parquet,
+/// json or ndjson (newline-delimited JSON). Returns false for any other extension.
+async fn register_file(
+    ctx: &SessionContext,
+    extension: &str,
+    name: &str,
+    path: &str,
+) -> Result<bool> {
+    match extension {
+        "csv" => ctx.register_csv(name, path, CsvReadOptions::new()).await?,
+        "parquet" => {
+            ctx.register_parquet(name, path, ParquetReadOptions::default())
+                .await?
+        }
+        "json" | "ndjson" => {
+            let suffix = format!(".{extension}");
+            let options = JsonReadOptions::default().file_extension(&suffix);
+            ctx.register_json(name, path, options).await?
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
 }

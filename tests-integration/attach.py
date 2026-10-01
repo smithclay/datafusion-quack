@@ -8,28 +8,17 @@ process that ATTACHes the server as `df`, and checks the rows that come back.
 """
 
 import argparse
-import json
-import subprocess
 import sys
+
+import duckdb_cli
 
 
 def run(args, sql):
     setup = f"CREATE SECRET (TYPE quack, TOKEN '{args.token}'); ATTACH '{args.uri}' AS df;"
-    result = subprocess.run(
-        [args.duckdb, "-init", "/dev/null", "-json", "-c", setup + sql],
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    if result.returncode != 0 or "Error" in result.stderr:
-        raise AssertionError(f"{sql}: {(result.stderr or result.stdout).strip()}")
-    decoder, text, position, last = json.JSONDecoder(), result.stdout.strip(), 0, []
-    while position < len(text):
-        while position < len(text) and text[position].isspace():
-            position += 1
-        if position < len(text):
-            last, position = decoder.raw_decode(text, position)
-    return last
+    try:
+        return duckdb_cli.run(args.duckdb, setup + sql)
+    except RuntimeError as error:
+        raise AssertionError(f"{sql}: {error}") from error
 
 
 def check(name, actual, expected):

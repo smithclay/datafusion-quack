@@ -295,7 +295,7 @@ impl Dispatcher {
                 while let Some(batch) = stream.next().await {
                     batch?;
                     if cancel.is_cancelled() {
-                        return Err(ClientError::interrupted("query was cancelled"));
+                        return Err(ClientError::cancelled());
                     }
                 }
             }
@@ -358,10 +358,8 @@ impl Dispatcher {
                 slot.uuid.unwrap_or(ZERO_UUID)
             )));
         }
-        slot.abort(ClientError::interrupted("query was cancelled"));
-        if slot.abort_error.is_none() {
-            slot.abort_error = Some(ClientError::interrupted("query was cancelled"));
-        }
+        slot.abort(ClientError::cancelled());
+        slot.abort_error.get_or_insert_with(ClientError::cancelled);
         success()
     }
 }
@@ -373,7 +371,8 @@ fn parse(
 ) -> Result<std::collections::VecDeque<Statement>, ClientError> {
     let dialect_name = session
         .ctx
-        .state()
+        .state_ref()
+        .read()
         .config()
         .options()
         .sql_parser

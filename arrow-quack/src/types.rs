@@ -1,6 +1,6 @@
 //! Arrow types as DuckDB logical types, and their DuckDB names.
 
-use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use quack_protocol::{ChildType, LogicalType, LogicalTypes};
 
 use crate::{Error, Result};
@@ -176,9 +176,7 @@ fn type_name(data_type: &DataType) -> Result<String> {
         DataType::Timestamp(TimeUnit::Millisecond, None) => "TIMESTAMP_MS".into(),
         DataType::Timestamp(TimeUnit::Microsecond, None) => "TIMESTAMP".into(),
         DataType::Timestamp(TimeUnit::Nanosecond, None) => "TIMESTAMP_NS".into(),
-        DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::DayTime)
-        | DataType::Interval(IntervalUnit::MonthDayNano)
-        | DataType::Duration(_) => "INTERVAL".into(),
+        DataType::Interval(_) | DataType::Duration(_) => "INTERVAL".into(),
         DataType::List(field) | DataType::LargeList(field) => {
             format!("{}[]", type_name(field.data_type())?)
         }

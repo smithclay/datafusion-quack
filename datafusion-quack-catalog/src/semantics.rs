@@ -28,12 +28,11 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, FieldRef, TimeUnit};
 use datafusion::common::DFSchema;
 use datafusion::error::Result;
+use datafusion::execution::FunctionRegistry;
 use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::planner::{
-    ExprPlanner, PlannerResult, RawAggregateExpr, RawBinaryExpr,
-};
+use datafusion::logical_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
 use datafusion::logical_expr::{
     Accumulator, AggregateUDF, AggregateUDFImpl, Expr, ExprSchemable, GroupsAccumulator, Operator,
     ReversedUDAF, Signature, Volatility, binary_expr, cast,
@@ -44,9 +43,16 @@ use datafusion::sql::sqlparser::ast::BinaryOperator;
 pub fn duckdb_client_semantics(state: SessionState) -> Result<SessionState> {
     let mut planners: Vec<Arc<dyn ExprPlanner>> = vec![Arc::new(DuckDbExprPlanner::new(&state))];
     planners.extend(state.expr_planners().iter().cloned());
-    Ok(SessionStateBuilder::new_from_existing(state)
+    let mut state = SessionStateBuilder::new_from_existing(state)
         .with_expr_planners(planners)
-        .build())
+        .build();
+    // DuckDB averages a DECIMAL as a DOUBLE
+    if let Some(avg) = state.aggregate_functions().get("avg").cloned() {
+        state.register_udaf(Arc::new(coerced(avg, |t| {
+            t.is_decimal().then_some(DataType::Float64)
+        })))?;
+    }
+    Ok(state)
 }
 
 /// `sum` whose integer arguments are summed as `DECIMAL(38,0)`, so the sum can't wrap.
@@ -64,22 +70,16 @@ fn coerced(inner: Arc<AggregateUDF>, coerce: fn(&DataType) -> Option<DataType>) 
     })
 }
 
-/// Plans `/` and date arithmetic, and picks DuckDB's `avg`.
+/// Plans `/` and date arithmetic with DuckDB's result types.
 #[derive(Debug)]
 pub struct DuckDbExprPlanner {
-    avg: Option<Arc<AggregateUDF>>,
     to_days: Option<Arc<datafusion::logical_expr::ScalarUDF>>,
 }
 
 impl DuckDbExprPlanner {
-    /// A planner using `state`'s `avg` and `to_days`.
+    /// A planner using `state`'s `to_days`.
     pub fn new(state: &SessionState) -> Self {
         Self {
-            avg: state.aggregate_functions().get("avg").map(|inner| {
-                Arc::new(coerced(Arc::clone(inner), |t| {
-                    is_decimal(t).then_some(DataType::Float64)
-                }))
-            }),
             to_days: state.scalar_functions().get("to_days").cloned(),
         }
     }
@@ -93,15 +93,8 @@ impl DuckDbExprPlanner {
     }
 }
 
-fn is_decimal(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Decimal32(..) | DataType::Decimal64(..) | DataType::Decimal128(..)
-    )
-}
-
 fn is_exact_number(data_type: &DataType) -> bool {
-    data_type.is_integer() || is_decimal(data_type) || data_type.is_null()
+    data_type.is_integer() || data_type.is_decimal() || data_type.is_null()
 }
 
 const TIMESTAMP: DataType = DataType::Timestamp(TimeUnit::Microsecond, None);
@@ -162,16 +155,6 @@ impl ExprPlanner for DuckDbExprPlanner {
             _ => return Ok(PlannerResult::Original(expr)),
         };
         Ok(PlannerResult::Planned(planned))
-    }
-
-    fn plan_aggregate(
-        &self,
-        mut expr: RawAggregateExpr,
-    ) -> Result<PlannerResult<RawAggregateExpr>> {
-        if let (Some(avg), "avg") = (&self.avg, expr.func.name()) {
-            expr.func = Arc::clone(avg);
-        }
-        Ok(PlannerResult::Original(expr))
     }
 }
 

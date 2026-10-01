@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, Int64Array, Int64Builder};
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{ScalarValue, exec_err, plan_err};
 use datafusion::error::Result;
@@ -124,55 +124,39 @@ impl ScalarUDFImpl for Length {
 }
 
 fn lengths(array: &ArrayRef) -> Result<ArrayRef> {
-    fn collect(len: usize, mut value: impl FnMut(usize) -> Option<i64>) -> ArrayRef {
-        let mut builder = Int64Builder::with_capacity(len);
-        for index in 0..len {
-            builder.append_option(value(index));
-        }
-        Arc::new(builder.finish())
-    }
-    let valid = |index: usize| array.is_valid(index);
-    let len = array.len();
+    // DuckDB counts characters; arrow's length kernel counts bytes
+    let chars = |value: Option<&str>| value.map(|v| v.chars().count() as i64);
     Ok(match array.data_type() {
-        DataType::Null => Arc::new(Int64Array::new_null(len)),
-        DataType::Utf8 => {
-            let a = array.as_string::<i32>();
-            collect(len, |i| valid(i).then(|| a.value(i).chars().count() as i64))
+        DataType::Null => Arc::new(Int64Array::new_null(array.len())),
+        DataType::Utf8 => Arc::new(
+            array
+                .as_string::<i32>()
+                .iter()
+                .map(chars)
+                .collect::<Int64Array>(),
+        ),
+        DataType::LargeUtf8 => Arc::new(
+            array
+                .as_string::<i64>()
+                .iter()
+                .map(chars)
+                .collect::<Int64Array>(),
+        ),
+        DataType::Utf8View => Arc::new(
+            array
+                .as_string_view()
+                .iter()
+                .map(chars)
+                .collect::<Int64Array>(),
+        ),
+        DataType::Dictionary(_, value) if value.is_string() => {
+            lengths(&arrow::compute::cast(array, value)?)?
         }
-        DataType::LargeUtf8 => {
-            let a = array.as_string::<i64>();
-            collect(len, |i| valid(i).then(|| a.value(i).chars().count() as i64))
-        }
-        DataType::Utf8View => {
-            let a = array.as_string_view();
-            collect(len, |i| valid(i).then(|| a.value(i).chars().count() as i64))
-        }
-        DataType::Binary => {
-            let a = array.as_binary::<i32>();
-            collect(len, |i| valid(i).then(|| a.value(i).len() as i64))
-        }
-        DataType::LargeBinary => {
-            let a = array.as_binary::<i64>();
-            collect(len, |i| valid(i).then(|| a.value(i).len() as i64))
-        }
-        DataType::BinaryView => {
-            let a = array.as_binary_view();
-            collect(len, |i| valid(i).then(|| a.value(i).len() as i64))
-        }
-        DataType::List(_) => {
-            let a = array.as_list::<i32>();
-            collect(len, |i| valid(i).then(|| a.value_length(i) as i64))
-        }
-        DataType::LargeList(_) => {
-            let a = array.as_list::<i64>();
-            collect(len, |i| valid(i).then(|| a.value_length(i)))
-        }
-        DataType::FixedSizeList(_, size) => collect(len, |i| valid(i).then_some(*size as i64)),
-        DataType::Dictionary(_, value) => {
-            let values = arrow::compute::cast(array, value)?;
-            return lengths(&values);
-        }
-        other => return exec_err!("length() takes a string or a list, not {other}"),
+        // bytes of a BLOB, elements of a list
+        _ => arrow::compute::cast(
+            &arrow::compute::kernels::length::length(array)?,
+            &DataType::Int64,
+        )?,
     })
 }
 

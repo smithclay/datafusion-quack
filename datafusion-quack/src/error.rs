@@ -97,9 +97,14 @@ impl ClientError {
         self
     }
 
-    /// The query was cancelled, in the words DuckDB clients look for.
+    /// The query was interrupted, in the words DuckDB clients look for.
     pub fn interrupted(reason: &str) -> Self {
         Self::new(ExceptionType::Interrupt, format!("Interrupted: {reason}"))
+    }
+
+    /// The query was cancelled.
+    pub fn cancelled() -> Self {
+        Self::interrupted("query was cancelled")
     }
 }
 

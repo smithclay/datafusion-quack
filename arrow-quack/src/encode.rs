@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, FixedSizeListArray, GenericListArray, OffsetSizeTrait,
-    PrimitiveArray, StructArray,
+    Array, ArrayRef, AsArray, BooleanArray, FixedSizeListArray, OffsetSizeTrait, PrimitiveArray,
+    StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
@@ -138,15 +138,13 @@ fn normalize(array: &ArrayRef) -> Result<ArrayRef> {
                 array.nulls().cloned(),
             )?)
         }
-        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _)
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _)
             if contains_dictionary(field.data_type()) =>
         {
-            let target = without_dictionaries(array.data_type());
-            cast(array, &target)?
-        }
-        DataType::Map(field, _) if contains_dictionary(field.data_type()) => {
-            let target = without_dictionaries(array.data_type());
-            cast(array, &target)?
+            cast(array, &without_dictionaries(array.data_type()))?
         }
         _ => Arc::clone(array),
     })
@@ -207,7 +205,7 @@ fn write_vector(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()> {
 
 fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()> {
     let count = array.len();
-    let nulls = logical_nulls(array);
+    let nulls = array.logical_nulls().filter(|nulls| nulls.null_count() > 0);
     write_validity(writer, nulls.as_ref(), count)?;
     let valid = |index: usize| nulls.as_ref().is_none_or(|nulls| nulls.is_valid(index));
 
@@ -243,27 +241,34 @@ fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()>
         DataType::Decimal128(precision, _) => {
             write_decimal::<Decimal128Type>(writer, array, *precision, &valid, |v| v)?
         }
-        DataType::Utf8 => write_strings(writer, count, &valid, |i| {
-            array.as_string::<i32>().value(i).as_bytes()
-        })?,
-        DataType::LargeUtf8 => write_strings(writer, count, &valid, |i| {
-            array.as_string::<i64>().value(i).as_bytes()
-        })?,
-        DataType::Utf8View => write_strings(writer, count, &valid, |i| {
-            array.as_string_view().value(i).as_bytes()
-        })?,
+        DataType::Utf8 => {
+            let a = array.as_string::<i32>();
+            write_strings(writer, count, &valid, |i| a.value(i).as_bytes())?
+        }
+        DataType::LargeUtf8 => {
+            let a = array.as_string::<i64>();
+            write_strings(writer, count, &valid, |i| a.value(i).as_bytes())?
+        }
+        DataType::Utf8View => {
+            let a = array.as_string_view();
+            write_strings(writer, count, &valid, |i| a.value(i).as_bytes())?
+        }
         DataType::Binary => {
-            write_strings(writer, count, &valid, |i| array.as_binary::<i32>().value(i))?
+            let a = array.as_binary::<i32>();
+            write_strings(writer, count, &valid, |i| a.value(i))?
         }
         DataType::LargeBinary => {
-            write_strings(writer, count, &valid, |i| array.as_binary::<i64>().value(i))?
+            let a = array.as_binary::<i64>();
+            write_strings(writer, count, &valid, |i| a.value(i))?
         }
         DataType::BinaryView => {
-            write_strings(writer, count, &valid, |i| array.as_binary_view().value(i))?
+            let a = array.as_binary_view();
+            write_strings(writer, count, &valid, |i| a.value(i))?
         }
-        DataType::FixedSizeBinary(_) => write_strings(writer, count, &valid, |i| {
-            array.as_fixed_size_binary().value(i)
-        })?,
+        DataType::FixedSizeBinary(_) => {
+            let a = array.as_fixed_size_binary();
+            write_strings(writer, count, &valid, |i| a.value(i))?
+        }
         DataType::Date32 => write_primitive::<Date32Type, _>(writer, array, &valid, |v| v)?,
         DataType::Date64 => write_primitive::<Date64Type, _>(writer, array, &valid, |v| {
             i32::try_from(v.div_euclid(MILLIS_PER_DAY)).unwrap_or(i32::MAX)
@@ -308,42 +313,54 @@ fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()>
                 }
             }
         }
-        DataType::Interval(unit) => write_interval(writer, array, *unit, &valid)?,
-        DataType::Duration(unit) => {
-            let micros: Box<dyn Fn(i64) -> i64> = match unit {
-                TimeUnit::Second => Box::new(|v: i64| v.saturating_mul(1_000_000)),
-                TimeUnit::Millisecond => Box::new(|v: i64| v.saturating_mul(1_000)),
-                TimeUnit::Microsecond => Box::new(|v: i64| v),
-                TimeUnit::Nanosecond => Box::new(|v: i64| v / 1_000),
-            };
-            let values: Vec<i64> = match unit {
-                TimeUnit::Second => durations::<DurationSecondType>(array),
-                TimeUnit::Millisecond => durations::<DurationMillisecondType>(array),
-                TimeUnit::Microsecond => durations::<DurationMicrosecondType>(array),
-                TimeUnit::Nanosecond => durations::<DurationNanosecondType>(array),
-            };
-            write_fixed(writer, count, &interval_null(), |data, index| {
-                if valid(index) {
-                    // as DuckDB's Interval::FromMicro: whole days, then the rest
-                    let micros = micros(values[index]);
-                    let days = i32::try_from(micros / MICROS_PER_DAY).unwrap_or(i32::MAX);
-                    write_interval_value(data, 0, days, micros % MICROS_PER_DAY);
-                }
-                Ok(())
-            })?;
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let a = array.as_primitive::<IntervalYearMonthType>();
+            write_intervals(writer, count, &valid, |i| (a.value(i), 0, 0))?
         }
-        DataType::List(_) => write_list(writer, array.as_list::<i32>(), &valid)?,
-        DataType::LargeList(_) => write_list(writer, array.as_list::<i64>(), &valid)?,
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let a = array.as_primitive::<IntervalDayTimeType>();
+            write_intervals(writer, count, &valid, |i| {
+                let v = a.value(i);
+                (0, v.days, i64::from(v.milliseconds) * 1_000)
+            })?
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let a = array.as_primitive::<IntervalMonthDayNanoType>();
+            write_intervals(writer, count, &valid, |i| {
+                let v = a.value(i);
+                (v.months, v.days, v.nanoseconds / 1_000)
+            })?
+        }
+        DataType::Duration(unit) => match unit {
+            TimeUnit::Second => {
+                write_durations::<DurationSecondType>(writer, array, &valid, |v| {
+                    v.saturating_mul(1_000_000)
+                })?
+            }
+            TimeUnit::Millisecond => {
+                write_durations::<DurationMillisecondType>(writer, array, &valid, |v| {
+                    v.saturating_mul(1_000)
+                })?
+            }
+            TimeUnit::Microsecond => {
+                write_durations::<DurationMicrosecondType>(writer, array, &valid, |v| v)?
+            }
+            TimeUnit::Nanosecond => {
+                write_durations::<DurationNanosecondType>(writer, array, &valid, |v| v / 1_000)?
+            }
+        },
+        DataType::List(_) => {
+            let list = array.as_list::<i32>();
+            write_list_body(writer, list.value_offsets(), list.values(), &valid)?
+        }
+        DataType::LargeList(_) => {
+            let list = array.as_list::<i64>();
+            write_list_body(writer, list.value_offsets(), list.values(), &valid)?
+        }
         DataType::Map(..) => {
             let map = array.as_map();
-            let offsets = map.value_offsets();
-            let start = offsets[0] as usize;
-            let end = offsets[count] as usize;
-            let entries = map.entries().slice(start, end - start);
-            write_list_entries(writer, offsets.iter().map(|o| *o as usize), count, &valid)?;
-            writer.write_field(106, |writer| {
-                write_vector(writer, &entries).map_err(protocol_error)
-            })?;
+            let entries: ArrayRef = Arc::new(map.entries().clone());
+            write_list_body(writer, map.value_offsets(), &entries, &valid)?
         }
         DataType::FixedSizeList(_, size) => {
             let list: &FixedSizeListArray = array.as_fixed_size_list();
@@ -367,17 +384,6 @@ fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()>
         other => return Err(Error::unsupported(other, "no DuckDB counterpart")),
     }
     Ok(())
-}
-
-/// The nulls of `array`, including those of a `Null` array, which has no buffer.
-fn logical_nulls(array: &dyn Array) -> Option<NullBuffer> {
-    match array.data_type() {
-        DataType::Null => Some(NullBuffer::new_null(array.len())),
-        _ => array
-            .nulls()
-            .filter(|nulls| nulls.null_count() > 0)
-            .cloned(),
-    }
 }
 
 fn write_validity(
@@ -544,97 +550,69 @@ fn write_interval_value(data: &mut Vec<u8>, months: i32, days: i32, micros: i64)
     micros.put(data);
 }
 
-fn write_interval(
+/// Writes INTERVALs; `value` gives a row's (months, days, microseconds).
+fn write_intervals(
     writer: &mut BinaryWriter,
-    array: &dyn Array,
-    unit: IntervalUnit,
-    valid: &dyn Fn(usize) -> bool,
-) -> Result<()> {
-    let count = array.len();
-    match unit {
-        IntervalUnit::YearMonth => {
-            let values = array.as_primitive::<IntervalYearMonthType>();
-            write_fixed(writer, count, &interval_null(), |data, index| {
-                if valid(index) {
-                    write_interval_value(data, values.value(index), 0, 0);
-                }
-                Ok(())
-            })
-        }
-        IntervalUnit::DayTime => {
-            let values = array.as_primitive::<IntervalDayTimeType>();
-            write_fixed(writer, count, &interval_null(), |data, index| {
-                if valid(index) {
-                    let value = values.value(index);
-                    write_interval_value(
-                        data,
-                        0,
-                        value.days,
-                        i64::from(value.milliseconds) * 1_000,
-                    );
-                }
-                Ok(())
-            })
-        }
-        IntervalUnit::MonthDayNano => {
-            let values = array.as_primitive::<IntervalMonthDayNanoType>();
-            write_fixed(writer, count, &interval_null(), |data, index| {
-                if valid(index) {
-                    let value = values.value(index);
-                    write_interval_value(data, value.months, value.days, value.nanoseconds / 1_000);
-                }
-                Ok(())
-            })
-        }
-    }
-}
-
-fn durations<T: ArrowPrimitiveType<Native = i64>>(array: &dyn Array) -> Vec<i64> {
-    array.as_primitive::<T>().values().to_vec()
-}
-
-/// Writes fields 104 and 105 for `count` rows whose ranges are `offsets` (count + 1
-/// of them), rebased to the first. A NULL row is the empty range at 0, as DuckDB writes it.
-fn write_list_entries(
-    writer: &mut BinaryWriter,
-    offsets: impl Iterator<Item = usize>,
     count: usize,
     valid: &dyn Fn(usize) -> bool,
+    value: impl Fn(usize) -> (i32, i32, i64),
 ) -> Result<()> {
-    let offsets: Vec<usize> = offsets.collect();
-    let base = offsets[0];
+    write_fixed(writer, count, &interval_null(), |data, index| {
+        if valid(index) {
+            let (months, days, micros) = value(index);
+            write_interval_value(data, months, days, micros);
+        }
+        Ok(())
+    })
+}
+
+/// Writes durations as INTERVALs of whole days and the rest, as DuckDB's
+/// `Interval::FromMicro`; `micros` converts a value to microseconds.
+fn write_durations<T: ArrowPrimitiveType<Native = i64>>(
+    writer: &mut BinaryWriter,
+    array: &dyn Array,
+    valid: &dyn Fn(usize) -> bool,
+    micros: impl Fn(i64) -> i64,
+) -> Result<()> {
+    let values = array.as_primitive::<T>();
+    write_intervals(writer, values.len(), valid, |i| {
+        let micros = micros(values.value(i));
+        let days = i32::try_from(micros / MICROS_PER_DAY).unwrap_or(i32::MAX);
+        (0, days, micros % MICROS_PER_DAY)
+    })
+}
+
+/// Writes a LIST or MAP vector's fields 104 to 106 for rows whose child ranges are
+/// `offsets` (one more than the rows), rebased to the first. A NULL row is the empty
+/// range at 0, as DuckDB writes it.
+fn write_list_body<O: OffsetSizeTrait>(
+    writer: &mut BinaryWriter,
+    offsets: &[O],
+    values: &ArrayRef,
+    valid: &dyn Fn(usize) -> bool,
+) -> Result<()> {
+    let count = offsets.len() - 1;
+    let offset = |index: usize| offsets[index].as_usize();
+    let base = offset(0);
     writer.write_field(104, |writer| {
-        writer.write_uleb((offsets[count] - base) as u64)
+        writer.write_uleb((offset(count) - base) as u64)
     })?;
     writer.write_field(105, |writer| {
         writer.write_uleb(count as u64)?;
         for index in 0..count {
-            let (offset, length) = if valid(index) {
-                (offsets[index] - base, offsets[index + 1] - offsets[index])
+            let (start, length) = if valid(index) {
+                (offset(index) - base, offset(index + 1) - offset(index))
             } else {
                 (0, 0)
             };
             writer.write_object(|entry| {
-                entry.write_field(100, |entry| entry.write_uleb(offset as u64))?;
+                entry.write_field(100, |entry| entry.write_uleb(start as u64))?;
                 entry.write_field(101, |entry| entry.write_uleb(length as u64))
             })?;
         }
         Ok(())
     })?;
-    Ok(())
-}
-
-fn write_list<O: OffsetSizeTrait>(
-    writer: &mut BinaryWriter,
-    list: &GenericListArray<O>,
-    valid: &dyn Fn(usize) -> bool,
-) -> Result<()> {
-    let count = list.len();
-    let offsets = list.value_offsets();
-    let start = offsets[0].as_usize();
-    let end = offsets[count].as_usize();
-    write_list_entries(writer, offsets.iter().map(|o| o.as_usize()), count, valid)?;
-    let child = list.values().slice(start, end - start);
+    let child = values.slice(base, offset(count) - base);
     writer.write_field(106, |writer| {
         write_vector(writer, &child).map_err(protocol_error)
     })?;

@@ -12,7 +12,6 @@ use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::TableReference;
-use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
 
@@ -31,9 +30,8 @@ pub async fn load(ctx: &SessionContext, seed: Seed) -> Result<()> {
 }
 
 fn register(ctx: &SessionContext, name: &str, batch: RecordBatch) -> Result<()> {
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     // bare, so a mixed-case name keeps its case
-    ctx.register_table(TableReference::bare(name), Arc::new(table))?;
+    ctx.register_batch(TableReference::bare(name), batch)?;
     Ok(())
 }
 

@@ -16,8 +16,9 @@ import json
 import math
 import os
 import re
-import subprocess
 import sys
+
+from duckdb_cli import run as run_duckdb
 
 REL_TOLERANCE = 1e-9
 
@@ -59,34 +60,6 @@ COPY (
   FROM range(1, 41) t(i)
 ) TO '{path}' (FORMAT parquet);
 """
-
-
-def run_duckdb(duckdb, sql):
-    result = subprocess.run(
-        [duckdb, "-init", "/dev/null", "-json", "-c", sql],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    if result.returncode != 0 or "Error" in result.stderr:
-        raise RuntimeError((result.stderr or result.stdout).strip())
-    # each statement that returns rows prints one JSON array; keep the last
-    arrays = [line for line in result.stdout.split("\n") if line.strip()]
-    text = result.stdout.strip()
-    if not text:
-        return []
-    # the output is a sequence of JSON arrays; parse them all and keep the last
-    decoder = json.JSONDecoder()
-    position, last = 0, []
-    while position < len(text):
-        while position < len(text) and text[position].isspace():
-            position += 1
-        if position >= len(text):
-            break
-        value, position = decoder.raw_decode(text, position)
-        last = value
-    del arrays
-    return last
 
 
 NUMBER = re.compile(r"^-?\d+(\.\d+)?$")

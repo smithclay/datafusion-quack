@@ -97,19 +97,6 @@ fn with_connection(request: &[u8], connection_id: &str) -> Vec<u8> {
     encode_response(&message).unwrap()
 }
 
-fn connection_id(response: &[u8]) -> String {
-    match decode_request(response).unwrap() {
-        QuackMessage::ConnectionResponse { header, .. } => header.connection_id.unwrap(),
-        other => panic!("expected CONNECTION_RESPONSE, got {other:?}"),
-    }
-}
-
-async fn post(client: &reqwest::Client, url: &str, body: Vec<u8>) -> Vec<u8> {
-    let response = client.post(url).body(body).send().await.unwrap();
-    assert_eq!(response.status(), 200);
-    response.bytes().await.unwrap().to_vec()
-}
-
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(dir().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
@@ -124,9 +111,8 @@ async fn responses_match_duckdb_byte_for_byte() {
         ctx.sql(&statement).await.unwrap().collect().await.unwrap();
     }
     let server = TestServer::start(ctx, options().with_token(GOLDEN_TOKEN)).await;
-    let http = reqwest::Client::new();
 
-    let connected = post(&http, &server.url, fixture("connect.req")).await;
+    let connected = post_bytes(&server.url, fixture("connect.req")).await;
     let ours = decode_request(&connected).unwrap();
     let QuackMessage::ConnectionResponse {
         quack_version,
@@ -152,7 +138,7 @@ async fn responses_match_duckdb_byte_for_byte() {
 
     for (index, sql) in QUERIES.iter().enumerate() {
         let request = with_connection(&fixture(&format!("q{}.req", index + 1)), &id);
-        let response = post(&http, &server.url, request).await;
+        let response = post_bytes(&server.url, request).await;
         let expected = fixture(&format!("q{}.resp", index + 1));
         if index == ERROR_QUERY {
             assert!(matches!(
@@ -176,7 +162,7 @@ async fn responses_match_duckdb_byte_for_byte() {
 
     let request = with_connection(&fixture("disconnect.req"), &id);
     assert_eq!(
-        post(&http, &server.url, request).await,
+        post_bytes(&server.url, request).await,
         fixture("disconnect.resp")
     );
 }
@@ -204,18 +190,17 @@ fn fixtures_round_trip_through_the_codec() {
 #[ignore = "needs a DuckDB 2.0 quack_serve; set QUACK_GOLDEN_URI"]
 async fn capture_fixtures_from_duckdb() {
     let url = std::env::var("QUACK_GOLDEN_URI").expect("QUACK_GOLDEN_URI");
-    let http = reqwest::Client::new();
     let write = |name: &str, bytes: &[u8]| std::fs::write(dir().join(name), bytes).unwrap();
 
     let request = connect_request();
-    let response = post(&http, &url, request.clone()).await;
+    let response = post_bytes(&url, request.clone()).await;
     write("connect.req", &request);
     write("connect.resp", &response);
     let id = connection_id(&response);
 
     for (index, statement) in setup_sql().iter().enumerate() {
         let request = prepare_request(&id, 100 + index, statement);
-        let response = decode_request(&post(&http, &url, request).await).unwrap();
+        let response = decode_request(&post_bytes(&url, request).await).unwrap();
         assert!(
             !matches!(response, QuackMessage::ErrorResponse { .. }),
             "{statement}: {response:?}"
@@ -223,7 +208,7 @@ async fn capture_fixtures_from_duckdb() {
     }
     for (index, sql) in QUERIES.iter().enumerate() {
         let request = prepare_request(&id, index, sql);
-        let response = post(&http, &url, request.clone()).await;
+        let response = post_bytes(&url, request.clone()).await;
         write(&format!("q{}.req", index + 1), &request);
         write(&format!("q{}.resp", index + 1), &response);
     }
@@ -231,7 +216,7 @@ async fn capture_fixtures_from_duckdb() {
         header: MessageHeader::new(MessageType::DisconnectMessage).with_connection(id),
     })
     .unwrap();
-    let response = post(&http, &url, request.clone()).await;
+    let response = post_bytes(&url, request.clone()).await;
     write("disconnect.req", &request);
     write("disconnect.resp", &response);
 }

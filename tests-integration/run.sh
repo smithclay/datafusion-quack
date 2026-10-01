@@ -91,15 +91,16 @@ wait_for() {
     return 1
 }
 
+# start_server NAME URL ARGS...: starts a server and waits until URL answers
 start_server() {
-    local name=$1
-    shift
+    local name=$1 url=$2
+    shift 2
     RUST_LOG=${RUST_LOG:-info} "$SERVER" --token "$TOKEN" "$@" > "$OUT/server-$name.log" 2>&1 &
     PIDS+=($!)
+    wait_for "$url"
 }
 
-start_server seeded --port "$SEEDED_PORT" --seed provider-fixtures
-wait_for "http://127.0.0.1:$SEEDED_PORT/"
+start_server seeded "http://127.0.0.1:$SEEDED_PORT/" --port "$SEEDED_PORT" --seed provider-fixtures
 
 # --- 1. DuckDB ATTACH and the differential test ----------------------------------
 
@@ -116,8 +117,7 @@ if step differential; then
         "$DUCKDB" -init /dev/null -c "INSTALL tpch; LOAD tpch; CALL dbgen(sf = 0.01); EXPORT DATABASE '$DATA' (FORMAT parquet);"
     fi
     python3 "$HERE/differential.py" --duckdb "$DUCKDB" --uri x --token x --data "$DATA" --make-type-matrix
-    start_server data --port "$DATA_PORT" -d "$DATA"
-    wait_for "http://127.0.0.1:$DATA_PORT/"
+    start_server data "http://127.0.0.1:$DATA_PORT/" --port "$DATA_PORT" -d "$DATA"
     log "differential test: TPC-H and the type matrix, native DuckDB vs ATTACH"
     python3 "$HERE/differential.py" --duckdb "$DUCKDB" --uri "quack:127.0.0.1:$DATA_PORT" \
         --token "$TOKEN" --data "$DATA" --verbose
@@ -165,8 +165,8 @@ if step client; then
         -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" \
         -keyout "$OUT/tls-key.pem" -out "$OUT/tls-cert.pem" 2> /dev/null
     FINGERPRINT=$(openssl x509 -in "$OUT/tls-cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)
-    start_server tls --port "$TLS_PORT" --tls-cert "$OUT/tls-cert.pem" --tls-key "$OUT/tls-key.pem"
-    wait_for "https://127.0.0.1:$TLS_PORT/"
+    start_server tls "https://127.0.0.1:$TLS_PORT/" --port "$TLS_PORT" \
+        --tls-cert "$OUT/tls-cert.pem" --tls-key "$OUT/tls-key.pem"
 
     log "quack_protocol live suite (read-only tests)"
     (

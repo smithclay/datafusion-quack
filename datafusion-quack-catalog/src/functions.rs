@@ -186,15 +186,12 @@ impl TableFunctionImpl for DuckDbCatalogFunction {
         let list = Arc::clone(state.catalog_list());
         let function = self.function;
         let oids = Arc::clone(&self.oids);
-        let schema = function.schema();
-        let batch_schema = Arc::clone(&schema);
         Ok(Arc::new(ComputedTable::new(
             function.name(),
-            schema,
-            move || {
+            function.schema(),
+            move |schema| {
                 let list = Arc::clone(&list);
                 let oids = Arc::clone(&oids);
-                let schema = Arc::clone(&batch_schema);
                 Box::pin(async move { compute(function, list.as_ref(), &oids, schema).await })
             },
         )))
@@ -260,6 +257,17 @@ async fn compute(
     let schema_oid = |catalog: &str, schema: &str| oids.oid(&["schema", catalog, schema]);
     let table_oid =
         |catalog: &str, schema: &str, table: &str| oids.oid(&["table", catalog, schema, table]);
+    // the database, schema and table columns that start a table's row
+    let located = |table: &walk::TableEntry| {
+        vec![
+            utf8(&table.catalog),
+            int64(database_oid(&table.catalog)),
+            utf8(&table.schema),
+            int64(schema_oid(&table.catalog, &table.schema)),
+            utf8(&table.name),
+            int64(table_oid(&table.catalog, &table.schema, &table.name)),
+        ]
+    };
 
     match function {
         CatalogFunction::Databases => {
@@ -302,14 +310,7 @@ async fn compute(
                     continue;
                 }
                 let table_schema = table.provider.schema();
-                let located = vec![
-                    utf8(&table.catalog),
-                    int64(database_oid(&table.catalog)),
-                    utf8(&table.schema),
-                    int64(schema_oid(&table.catalog, &table.schema)),
-                    utf8(&table.name),
-                    int64(table_oid(&table.catalog, &table.schema, &table.name)),
-                ];
+                let located = located(&table);
                 let column_count = int64(table_schema.fields().len() as i64);
                 if is_view {
                     let sql = table.provider.get_table_definition().map_or_else(
@@ -372,13 +373,8 @@ async fn compute(
                     let type_id = arrow_quack::arrow_to_logical_type(field.data_type())
                         .ok()
                         .map(|t| t.id as i64);
-                    rows.push(vec![
-                        utf8(&table.catalog),
-                        int64(database_oid(&table.catalog)),
-                        utf8(&table.schema),
-                        int64(schema_oid(&table.catalog, &table.schema)),
-                        utf8(&table.name),
-                        int64(table_oid(&table.catalog, &table.schema, &table.name)),
+                    let mut row = located(&table);
+                    row.extend([
                         utf8(field.name()),
                         ScalarValue::Int32(Some(index as i32 + 1)),
                         null_utf8(),
@@ -392,6 +388,7 @@ async fn compute(
                         int32(radix),
                         int32(scale),
                     ]);
+                    rows.push(row);
                 }
             }
         }

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 use datafusion_quack::{QuackServer, ServerOptions};
+use quack_protocol::server::{QuackMessage, decode_request};
 
 pub const TOKEN: &str = "test-token";
 
@@ -42,5 +43,25 @@ impl TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+/// POSTs a request body to `url`; requires HTTP 200 and returns the response body.
+pub async fn post_bytes(url: &str, body: Vec<u8>) -> Vec<u8> {
+    let response = reqwest::Client::new()
+        .post(url)
+        .body(body)
+        .send()
+        .await
+        .expect("an answer");
+    assert_eq!(response.status(), 200);
+    response.bytes().await.unwrap().to_vec()
+}
+
+/// The connection id of a CONNECTION_RESPONSE.
+pub fn connection_id(response: &[u8]) -> String {
+    match decode_request(response).unwrap() {
+        QuackMessage::ConnectionResponse { header, .. } => header.connection_id.unwrap(),
+        other => panic!("expected CONNECTION_RESPONSE, got {other:?}"),
     }
 }

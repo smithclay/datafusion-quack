@@ -2,11 +2,13 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::fmt::Write;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use datafusion::error::Result as DataFusionResult;
+use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion::prelude::SessionContext;
 use quack_protocol::server::HugeIntParts;
 use rand::RngCore;
@@ -29,12 +31,14 @@ pub trait SessionContextProvider: Send + Sync + Debug {
 /// queries and expects DuckDB's answers. Other clients, such as the DataFusion Quack
 /// table provider, keep DataFusion's semantics.
 ///
-/// The sessions share the base context's catalogs, functions and runtime, so a table
-/// one client creates is visible to the others, as in DuckDB. Settings a session
-/// changes stay in that session.
-#[derive(Clone)]
+/// The sessions share the base context's catalogs and runtime, so a table one client
+/// creates is visible to the others, as in DuckDB. Settings a session changes stay in
+/// that session. The DuckDB-compatible state is built once, on the first connection,
+/// from the base context's functions and settings at that moment.
 pub struct SharedSessionContextProvider {
     base: Arc<SessionContext>,
+    /// The base state with DuckDB compatibility, and with DuckDB's result types too.
+    states: tokio::sync::OnceCell<(SessionState, SessionState)>,
 }
 
 impl Debug for SharedSessionContextProvider {
@@ -48,17 +52,32 @@ impl Debug for SharedSessionContextProvider {
 impl SharedSessionContextProvider {
     /// Sessions derived from `base`.
     pub fn new(base: Arc<SessionContext>) -> Self {
-        Self { base }
+        Self {
+            base,
+            states: tokio::sync::OnceCell::new(),
+        }
     }
 }
 
 #[async_trait]
 impl SessionContextProvider for SharedSessionContextProvider {
     async fn session_context(&self, session: &SessionInfo) -> DataFusionResult<SessionContext> {
-        let mut state = datafusion_quack_catalog::duckdb_session_state(self.base.state())?;
-        if session.is_duckdb_client() {
-            state = datafusion_quack_catalog::duckdb_client_semantics(state)?;
-        }
+        let (plain, duckdb) = self
+            .states
+            .get_or_try_init(|| async {
+                let plain = datafusion_quack_catalog::duckdb_session_state(self.base.state())?;
+                let duckdb = datafusion_quack_catalog::duckdb_client_semantics(plain.clone())?;
+                Ok::<_, datafusion::error::DataFusionError>((plain, duckdb))
+            })
+            .await?;
+        let state = if session.is_duckdb_client() {
+            duckdb
+        } else {
+            plain
+        };
+        let state = SessionStateBuilder::new_from_existing(state.clone())
+            .with_session_id(session.connection_id.clone())
+            .build();
         Ok(SessionContext::new_with_state(state))
     }
 }
@@ -164,7 +183,11 @@ impl Session {
 pub(crate) fn new_connection_id() -> String {
     let mut bytes = [0u8; 16];
     rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02X}")).collect()
+    bytes.iter().fold(String::with_capacity(32), |mut id, b| {
+        // writing to a String can't fail
+        let _ = write!(id, "{b:02X}");
+        id
+    })
 }
 
 /// The open sessions.

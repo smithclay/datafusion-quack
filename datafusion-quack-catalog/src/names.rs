@@ -74,8 +74,12 @@ impl CatalogProviderList for DuckDbCatalogList {
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        let name = resolve(name, &self.inner.catalog_names())?;
-        let inner = self.inner.catalog(&name)?;
+        let inner = match self.inner.catalog(name) {
+            Some(inner) => inner,
+            None => self
+                .inner
+                .catalog(&resolve(name, &self.inner.catalog_names())?)?,
+        };
         let list: Arc<dyn CatalogProviderList> = self.this.upgrade()?;
         Some(Arc::new(DuckDbCatalog { inner, list }))
     }
@@ -94,9 +98,11 @@ impl CatalogProvider for DuckDbCatalog {
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        let names = self.inner.schema_names();
-        if let Some(found) = resolve(name, &names) {
-            let inner = self.inner.schema(&found)?;
+        let found = self.inner.schema(name).or_else(|| {
+            self.inner
+                .schema(&resolve(name, &self.inner.schema_names())?)
+        });
+        if let Some(inner) = found {
             return Some(Arc::new(DuckDbSchema { inner }));
         }
         if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
@@ -167,7 +173,7 @@ impl SchemaProvider for DuckDbSchema {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.inner.table_exist(&self.resolve(name))
+        self.inner.table_exist(name) || resolve(name, &self.inner.table_names()).is_some()
     }
 }
 
