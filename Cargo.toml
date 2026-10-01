@@ -33,7 +33,7 @@ clap = { version = "4", features = ["derive", "env"] }
 datafusion = { version = "55.1", default-features = false }
 futures = "0.3"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
-hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
+hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "tokio", "service"] }
 metrics = { version = "0.24", default-features = false }
 metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }

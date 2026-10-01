@@ -47,6 +47,9 @@ tokio = { workspace = true, features = ["test-util"] }
 reqwest = { version = "0.12", default-features = false }
 proptest = { workspace = true }
 metrics-util = { workspace = true }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
 
 [lints]
 workspace = true

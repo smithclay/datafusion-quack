@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
+use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -102,16 +103,23 @@ async fn reap(dispatcher: Arc<Dispatcher>) {
     }
 }
 
+/// How long a client may take over the TLS handshake before its socket is closed.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serves HTTPS until `shutdown` resolves, then stops accepting and waits for open
+/// connections to finish their requests, as the plain-HTTP path does.
 async fn serve_tls(
     listener: TcpListener,
     app: Router,
     acceptor: TlsAcceptor,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServerError> {
+    let graceful = GracefulShutdown::new();
+    let builder = auto::Builder::new(TokioExecutor::new());
     tokio::pin!(shutdown);
     loop {
         let (stream, peer) = tokio::select! {
-            () = &mut shutdown => return Ok(()),
+            () = &mut shutdown => break,
             accepted = listener.accept() => match accepted {
                 Ok(accepted) => accepted,
                 Err(error) => {
@@ -122,23 +130,33 @@ async fn serve_tls(
         };
         let acceptor = acceptor.clone();
         let app = app.clone();
+        let builder = builder.clone();
+        // taken now, so shutdown also waits for connections still in the handshake
+        let watcher = graceful.watcher();
         tokio::spawn(async move {
-            let stream = match acceptor.accept(stream).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    tracing::debug!(%peer, %error, "TLS handshake failed");
-                    return;
-                }
-            };
-            let service = TowerToHyperService::new(app);
-            if let Err(error) = auto::Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(stream), service)
-                .await
-            {
+            let stream =
+                match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+                    Ok(Ok(stream)) => stream,
+                    Ok(Err(error)) => {
+                        tracing::debug!(%peer, %error, "TLS handshake failed");
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::debug!(%peer, "TLS handshake timed out");
+                        return;
+                    }
+                };
+            let connection = builder
+                .serve_connection(TokioIo::new(stream), TowerToHyperService::new(app))
+                .into_owned();
+            if let Err(error) = watcher.watch(connection).await {
                 tracing::debug!(%peer, %error, "connection ended with an error");
             }
         });
     }
+    drop(listener);
+    graceful.shutdown().await;
+    Ok(())
 }
 
 fn tls_acceptor(cert: &std::path::Path, key: &std::path::Path) -> Result<TlsAcceptor, ServerError> {
