@@ -13,7 +13,7 @@ use datafusion::prelude::SessionContext;
 use quack_protocol::server::HugeIntParts;
 use rand::RngCore;
 
-use crate::auth::SessionInfo;
+use crate::auth::{ResultSemantics, SessionInfo};
 use crate::cursor::{CancelHandle, Cursor};
 use crate::error::ClientError;
 use crate::transaction::Transaction;
@@ -26,11 +26,9 @@ pub trait SessionContextProvider: Send + Sync + Debug {
 }
 
 /// Gives each session a context built from one base context, with DuckDB compatibility
-/// installed (see [`datafusion_quack_catalog::duckdb_session_state`]). Sessions of
-/// DuckDB clients also get DuckDB's result types
-/// ([`datafusion_quack_catalog::duckdb_client_semantics`]): DuckDB pushes whole
-/// queries and expects DuckDB's answers. Other clients, such as the DataFusion Quack
-/// table provider, keep DataFusion's semantics.
+/// installed (see [`datafusion_quack_catalog::duckdb_session_state`]). A session whose
+/// [`SessionInfo::result_semantics`] is [`ResultSemantics::DuckDb`] also gets DuckDB's
+/// result types ([`datafusion_quack_catalog::duckdb_client_semantics`]).
 ///
 /// The sessions share the base context's catalogs and runtime, so a table one client
 /// creates is visible to the others, as in DuckDB. Settings a session changes stay in
@@ -71,10 +69,9 @@ impl SessionContextProvider for SharedSessionContextProvider {
                 Ok::<_, datafusion::error::DataFusionError>((plain, duckdb))
             })
             .await?;
-        let state = if session.is_duckdb_client() {
-            duckdb
-        } else {
-            plain
+        let state = match session.result_semantics {
+            ResultSemantics::DuckDb => duckdb,
+            ResultSemantics::DataFusion => plain,
         };
         let state = SessionStateBuilder::new_from_existing(state.clone())
             .with_session_id(session.connection_id.clone())
@@ -371,6 +368,7 @@ mod tests {
                 connection_id: id.into(),
                 client_version: String::new(),
                 client_platform: String::new(),
+                result_semantics: ResultSemantics::DataFusion,
             },
             SessionContext::new(),
             timeout,

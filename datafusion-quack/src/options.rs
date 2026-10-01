@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::auth::ResultSemantics;
+
 /// The port DuckDB's `quack_serve` listens on by default.
 pub const DEFAULT_PORT: u16 = 9494;
 
@@ -36,6 +38,7 @@ pub struct ServerOptions {
     max_request_bytes: usize,
     max_inflight_batches: u64,
     batch_target_bytes: usize,
+    result_semantics: Option<ResultSemantics>,
 }
 
 impl Default for ServerOptions {
@@ -53,6 +56,7 @@ impl Default for ServerOptions {
             max_request_bytes: 64 * 1024 * 1024,
             max_inflight_batches: 64,
             batch_target_bytes: 1024 * 1024,
+            result_semantics: None,
         }
     }
 }
@@ -142,6 +146,14 @@ impl ServerOptions {
         self
     }
 
+    /// Gives every session `semantics`. By default each session gets
+    /// [`ResultSemantics::for_client`]: DuckDB's for DuckDB clients, DataFusion's for
+    /// the others.
+    pub fn with_result_semantics(mut self, semantics: ResultSemantics) -> Self {
+        self.result_semantics = Some(semantics);
+        self
+    }
+
     /// See [`with_host`](Self::with_host).
     pub fn host(&self) -> &str {
         &self.host
@@ -195,5 +207,12 @@ impl ServerOptions {
     /// See [`with_batch_target_bytes`](Self::with_batch_target_bytes).
     pub fn batch_target_bytes(&self) -> usize {
         self.batch_target_bytes
+    }
+
+    /// The semantics every session gets, or `None` when each client gets
+    /// [`ResultSemantics::for_client`]. See
+    /// [`with_result_semantics`](Self::with_result_semantics).
+    pub fn result_semantics(&self) -> Option<ResultSemantics> {
+        self.result_semantics
     }
 }

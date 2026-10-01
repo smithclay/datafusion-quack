@@ -74,6 +74,8 @@ datafusion-quack [OPTIONS]
   --seed provider-fixtures preload the fixture tables of the provider test suite
   --catalog / --schema     the default catalog and schema [memory / main]
   --memory-limit <BYTES>   memory for queries and unread results, e.g. 4G [unlimited]
+  --result-semantics <duckdb|datafusion>
+                           whose result types sessions get [by client, see below]
   --max-sessions, --heartbeat-max, --result-ttl, --inline-rows
 ```
 
@@ -110,8 +112,10 @@ all) and adds DuckDB compatibility from `datafusion-quack-catalog`:
 - **Result types, for DuckDB clients.** DuckDB shows the server's results as they come,
   so a DuckDB client's session gets DuckDB's types where they differ from
   DataFusion's: `/` on integers and decimals is `DOUBLE`, `avg(DECIMAL)` is `DOUBLE`,
-  `DATE + INTERVAL` is a `TIMESTAMP`. Other clients keep DataFusion's semantics. In
-  every session, `sum` of integers is `DECIMAL(38,0)` (DuckDB: `HUGEINT`), so it never
+  `DATE + INTERVAL` is a `TIMESTAMP`. Other clients, which report no DuckDB version,
+  keep DataFusion's semantics. `ServerOptions::with_result_semantics` (CLI:
+  `--result-semantics`) gives every session one or the other instead. In every
+  session, `sum` of integers is `DECIMAL(38,0)` (DuckDB: `HUGEINT`), so it never
   wraps.
 
 DataFusion has no transactions: each statement takes effect as it runs. `BEGIN` and

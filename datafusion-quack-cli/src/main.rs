@@ -20,7 +20,7 @@ use clap::Parser;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::{CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext};
-use datafusion_quack::{QuackServer, ServerOptions};
+use datafusion_quack::{QuackServer, ResultSemantics, ServerOptions};
 use datafusion_quack_cli::seed;
 use tracing_subscriber::EnvFilter;
 
@@ -99,6 +99,18 @@ struct Args {
     /// [default: unlimited]
     #[arg(long, value_name = "BYTES", value_parser = bytes_arg)]
     memory_limit: Option<usize>,
+
+    /// Whose result types every session gets where DuckDB and DataFusion differ (`5 /
+    /// 2`, `avg(DECIMAL)`, date arithmetic). [default: DuckDB's for DuckDB clients,
+    /// DataFusion's for the others]
+    #[arg(long, value_enum)]
+    result_semantics: Option<Semantics>,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum Semantics {
+    Duckdb,
+    Datafusion,
 }
 
 /// Parses a byte count with an optional K, M, G or T suffix (powers of 1024).
@@ -171,6 +183,12 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(rows) = args.inline_rows {
         options = options.with_inline_rows(rows);
+    }
+    if let Some(semantics) = args.result_semantics {
+        options = options.with_result_semantics(match semantics {
+            Semantics::Duckdb => ResultSemantics::DuckDb,
+            Semantics::Datafusion => ResultSemantics::DataFusion,
+        });
     }
     if let Some(token) = &args.token {
         options = options.with_token(token);

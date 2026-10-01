@@ -29,6 +29,8 @@ pub struct SessionInfo {
     pub client_version: String,
     /// The client's platform.
     pub client_platform: String,
+    /// Whose result types the session's queries get.
+    pub result_semantics: ResultSemantics,
 }
 
 impl SessionInfo {
@@ -36,6 +38,35 @@ impl SessionInfo {
     /// such as the Rust `quack_protocol` client, leave it empty.
     pub fn is_duckdb_client(&self) -> bool {
         !self.client_version.is_empty()
+    }
+}
+
+/// Whose rules a session's results follow where DuckDB and DataFusion differ: the
+/// type of `5 / 2`, of `avg(DECIMAL)`, of date arithmetic (see
+/// [`duckdb_client_semantics`](datafusion_quack_catalog::duckdb_client_semantics)).
+///
+/// A server picks one per session; see
+/// [`ServerOptions::with_result_semantics`](crate::ServerOptions::with_result_semantics).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ResultSemantics {
+    /// DuckDB's, as a DuckDB `ATTACH` expects: it shows the server's results as its
+    /// own.
+    DuckDb,
+    /// DataFusion's, as a DataFusion client (the Quack table provider) expects: it
+    /// plans with DataFusion's rules and pushes down SQL that relies on them.
+    DataFusion,
+}
+
+impl ResultSemantics {
+    /// The default choice for a client: DuckDB's for DuckDB itself (which reports its
+    /// version), DataFusion's for every other client.
+    pub fn for_client(client_version: &str) -> Self {
+        if client_version.is_empty() {
+            Self::DataFusion
+        } else {
+            Self::DuckDb
+        }
     }
 }
 
@@ -100,6 +131,15 @@ mod tests {
             client_version: String::new(),
             client_platform: String::new(),
         }
+    }
+
+    #[test]
+    fn duckdb_clients_get_duckdbs_semantics_by_default() {
+        assert_eq!(
+            ResultSemantics::for_client("v2.0.0"),
+            ResultSemantics::DuckDb
+        );
+        assert_eq!(ResultSemantics::for_client(""), ResultSemantics::DataFusion);
     }
 
     #[tokio::test]

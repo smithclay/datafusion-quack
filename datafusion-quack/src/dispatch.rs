@@ -18,7 +18,7 @@ use quack_protocol::server::{
     decode_header, decode_request, encode_prepare_response, encode_response,
 };
 
-use crate::auth::{AuthProvider, ConnectionRequest, SessionInfo};
+use crate::auth::{AuthProvider, ConnectionRequest, ResultSemantics, SessionInfo};
 use crate::cursor::{BatchProducer, CancelHandle, Cursor};
 use crate::error::ClientError;
 use crate::hooks::{QueryHook, QueryOutput};
@@ -178,10 +178,15 @@ impl Dispatcher {
         };
         self.auth.authenticate(&request).await?;
 
+        let result_semantics = self
+            .options
+            .result_semantics()
+            .unwrap_or_else(|| ResultSemantics::for_client(&request.client_version));
         let info = SessionInfo {
             connection_id: new_connection_id(),
             client_version: request.client_version,
             client_platform: request.client_platform,
+            result_semantics,
         };
         let ctx = self.provider.session_context(&info).await?;
         let connection_id = info.connection_id.clone();

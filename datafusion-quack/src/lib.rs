@@ -57,7 +57,7 @@ use std::sync::Arc;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use tokio::net::TcpListener;
 
-pub use auth::{AuthProvider, ConnectionRequest, SessionInfo, TokenAuth};
+pub use auth::{AuthProvider, ConnectionRequest, ResultSemantics, SessionInfo, TokenAuth};
 pub use datafusion_quack_catalog;
 pub use error::{ClientError, ExceptionType, ServerError};
 pub use hooks::{QueryHook, QueryOutput};

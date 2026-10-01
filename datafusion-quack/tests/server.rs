@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::prelude::SessionContext;
-use datafusion_quack::QuackServer;
+use datafusion_quack::{QuackServer, ResultSemantics};
 use futures::TryStreamExt;
 use quack_protocol::{QuackClient, QuackClientOptions, Value, rows_from_chunk};
 
@@ -217,4 +217,23 @@ async fn rollback_after_a_write_fails_and_says_the_write_was_kept() {
     ] {
         values(&client, sql).await;
     }
+}
+
+#[tokio::test]
+async fn result_semantics_follow_the_client_unless_the_server_chooses() {
+    // the Rust client isn't DuckDB, so by default it gets DataFusion's types
+    let server = TestServer::start(SessionContext::new(), options()).await;
+    let client = connect(&server).await;
+    assert_eq!(values(&client, "SELECT 5 / 2").await, [[Value::Int(2)]]);
+
+    let server = TestServer::start(
+        SessionContext::new(),
+        options().with_result_semantics(ResultSemantics::DuckDb),
+    )
+    .await;
+    let client = connect(&server).await;
+    assert_eq!(
+        values(&client, "SELECT 5 / 2").await,
+        [[Value::Double(2.5)]]
+    );
 }
