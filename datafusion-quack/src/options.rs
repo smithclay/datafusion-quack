@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use datafusion::execution::context::SQLOptions;
+
 use crate::auth::ResultSemantics;
 
 /// The port DuckDB's `quack_serve` listens on by default.
@@ -39,6 +41,7 @@ pub struct ServerOptions {
     max_inflight_batches: u64,
     batch_target_bytes: usize,
     result_semantics: Option<ResultSemantics>,
+    sql_options: SQLOptions,
 }
 
 impl Default for ServerOptions {
@@ -57,6 +60,7 @@ impl Default for ServerOptions {
             max_inflight_batches: 64,
             batch_target_bytes: 1024 * 1024,
             result_semantics: None,
+            sql_options: SQLOptions::new(),
         }
     }
 }
@@ -154,6 +158,28 @@ impl ServerOptions {
         self
     }
 
+    /// What statements clients may run, checked against every plan. Default: all of
+    /// them, as DuckDB's server and DataFusion's `SessionContext::sql` allow.
+    ///
+    /// A server open to untrusted clients should usually be read-only: DDL includes
+    /// `CREATE EXTERNAL TABLE` over the server's files, and DML includes `COPY … TO`,
+    /// which writes them.
+    ///
+    /// ```
+    /// use datafusion::execution::context::SQLOptions;
+    /// use datafusion_quack::ServerOptions;
+    ///
+    /// let read_only = ServerOptions::new().with_sql_options(
+    ///     SQLOptions::new().with_allow_ddl(false).with_allow_dml(false),
+    /// );
+    /// ```
+    ///
+    /// Statements a [`QueryHook`](crate::QueryHook) answers are the hook's to check.
+    pub fn with_sql_options(mut self, sql_options: SQLOptions) -> Self {
+        self.sql_options = sql_options;
+        self
+    }
+
     /// See [`with_host`](Self::with_host).
     pub fn host(&self) -> &str {
         &self.host
@@ -214,5 +240,10 @@ impl ServerOptions {
     /// [`with_result_semantics`](Self::with_result_semantics).
     pub fn result_semantics(&self) -> Option<ResultSemantics> {
         self.result_semantics
+    }
+
+    /// See [`with_sql_options`](Self::with_sql_options).
+    pub fn sql_options(&self) -> SQLOptions {
+        self.sql_options
     }
 }

@@ -77,6 +77,7 @@ datafusion-quack [OPTIONS]
   --result-semantics <duckdb|datafusion>
                            whose result types sessions get [by client, see below]
   --metrics-addr <ADDR>    serve Prometheus metrics at http://ADDR/metrics
+  --read-only              refuse DDL and DML (CREATE, INSERT, COPY … TO, …) from clients
   --max-sessions, --heartbeat-max, --result-ttl, --inline-rows
 ```
 
@@ -136,6 +137,11 @@ all) and adds DuckDB compatibility from `datafusion-quack-catalog`:
   `--result-semantics`) gives every session one or the other instead. In every
   session, `sum` of integers is `DECIMAL(38,0)` (DuckDB: `HUGEINT`), so it never
   wraps.
+
+Clients may run any statement DataFusion supports, as with DuckDB's own server. For
+untrusted clients, make the server read-only with `ServerOptions::with_sql_options`
+(CLI: `--read-only`): DDL includes `CREATE EXTERNAL TABLE` over the server's files, and
+DML includes `COPY … TO`, which writes them.
 
 DataFusion has no transactions: each statement takes effect as it runs. `BEGIN` and
 `COMMIT` are accepted, and `ROLLBACK` succeeds when nothing since `BEGIN` could have

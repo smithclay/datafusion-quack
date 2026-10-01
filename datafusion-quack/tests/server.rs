@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SQLOptions, SessionContext};
 use datafusion_quack::{QuackServer, ResultSemantics};
 use futures::TryStreamExt;
 use quack_protocol::{QuackClient, QuackClientOptions, Value, rows_from_chunk};
@@ -235,5 +235,38 @@ async fn result_semantics_follow_the_client_unless_the_server_chooses() {
     assert_eq!(
         values(&client, "SELECT 5 / 2").await,
         [[Value::Double(2.5)]]
+    );
+}
+
+#[tokio::test]
+async fn sql_options_can_make_the_server_read_only() {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t AS VALUES (1)").await.unwrap();
+    let read_only = SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false);
+    let server = TestServer::start(ctx, options().with_sql_options(read_only)).await;
+    let client = connect(&server).await;
+    assert_eq!(
+        values(&client, "SELECT count(*) FROM t").await,
+        [[Value::Int(1)]]
+    );
+    for sql in [
+        "CREATE TABLE u (i INT)",
+        "INSERT INTO t VALUES (2)",
+        "COPY t TO '/tmp/quack-read-only-test.csv'",
+        "CREATE EXTERNAL TABLE e STORED AS CSV LOCATION '/etc/hosts'",
+        "DROP TABLE t",
+    ] {
+        let error = client.query(sql, None).await.err().expect(sql);
+        assert!(
+            error.to_string().contains("not supported"),
+            "{sql}: {error}"
+        );
+    }
+    assert!(!std::path::Path::new("/tmp/quack-read-only-test.csv").exists());
+    assert_eq!(
+        values(&client, "SELECT count(*) FROM t").await,
+        [[Value::Int(1)]]
     );
 }

@@ -518,3 +518,21 @@ async fn a_fetch_of_the_last_result_answers_while_a_new_statement_runs() {
     post(&server, cancel_request(&id, 2)).await;
     prepare.await.unwrap();
 }
+
+#[tokio::test]
+async fn refused_statements_are_permission_errors() {
+    let read_only = datafusion::prelude::SQLOptions::new().with_allow_ddl(false);
+    let server =
+        TestServer::start(SessionContext::new(), options().with_sql_options(read_only)).await;
+    let id = open_session(&server).await;
+    match post(&server, prepare(&id, "CREATE TABLE t (i INT)")).await {
+        QuackMessage::ErrorResponse {
+            exception_type,
+            message,
+            ..
+        } => {
+            assert_eq!(exception_type.as_deref(), Some("Permission"), "{message}");
+        }
+        other => panic!("expected ERROR_RESPONSE, got {other:?}"),
+    }
+}

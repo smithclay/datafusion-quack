@@ -370,6 +370,10 @@ impl Dispatcher {
         }
         let state = session.ctx.state();
         let plan = state.statement_to_plan(statement).await?;
+        self.options
+            .sql_options()
+            .verify_plan(&plan)
+            .map_err(|e| ClientError::permission(e.message()))?;
         let frame = session.ctx.execute_logical_plan(plan).await?;
         let stream = frame.execute_stream().await?;
         if stream.schema().fields().is_empty() {

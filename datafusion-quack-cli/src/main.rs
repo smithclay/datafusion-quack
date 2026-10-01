@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::SQLOptions;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::{CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext};
 use datafusion_quack::{QuackServer, ResultSemantics, ServerOptions};
@@ -109,6 +110,11 @@ struct Args {
     /// Serve Prometheus metrics at http://ADDR/metrics, e.g. `127.0.0.1:9495`.
     #[arg(long, value_name = "ADDR", env = "QUACK_METRICS_ADDR")]
     metrics_addr: Option<std::net::SocketAddr>,
+
+    /// Refuse DDL and DML from clients: no CREATE, INSERT, DROP, COPY … TO or CREATE
+    /// EXTERNAL TABLE. The tables registered on the command line stay queryable.
+    #[arg(long, env = "QUACK_READ_ONLY")]
+    read_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -199,6 +205,13 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             Semantics::Duckdb => ResultSemantics::DuckDb,
             Semantics::Datafusion => ResultSemantics::DataFusion,
         });
+    }
+    if args.read_only {
+        options = options.with_sql_options(
+            SQLOptions::new()
+                .with_allow_ddl(false)
+                .with_allow_dml(false),
+        );
     }
     if let Some(token) = &args.token {
         options = options.with_token(token);
