@@ -6,11 +6,13 @@ members = [
     "datafusion-quack",
     "datafusion-quack-cli",
 ]
+# the integration runner checks other repositories out under .cache
+exclude = ["tests-integration/.cache", "fuzz"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.94.0"
 license = "Apache-2.0"
 repository = "https://github.com/smithclay/datafusion-quack"
 homepage = "https://github.com/smithclay/datafusion-quack"

@@ -15,7 +15,7 @@ jobs:
   latest-dependencies:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo update
       - run: cargo test --workspace --all-features
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
@@ -35,7 +35,7 @@ jobs:
         run: |
           mkdir -p corpus/dispatch && cp seeds/dispatch/* corpus/dispatch/
           cargo fuzz run dispatch -- -max_total_time=1800 -rss_limit_mb=4096
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-artifacts
@@ -45,13 +45,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: the latest DuckDB 2.0 alpha
         run: |
           echo "DUCKDB_STAGED=$(curl -fsS https://duckdb-staging.duckdb.org/latest_alpha_version.txt)" >> "$GITHUB_ENV"
       - run: tests-integration/run.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: integration-logs
