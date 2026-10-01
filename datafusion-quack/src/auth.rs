@@ -9,6 +9,7 @@ use crate::error::ClientError;
 
 /// What a client sent in its CONNECTION request.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ConnectionRequest {
     /// The token (`auth_string`).
     pub auth_string: String,
@@ -20,6 +21,7 @@ pub struct ConnectionRequest {
 
 /// A session, as hooks and the [`AuthProvider`] see it.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SessionInfo {
     /// The session's connection id.
     pub connection_id: String,

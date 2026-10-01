@@ -1,27 +1,4 @@
 //! DuckDB's result types, for sessions of DuckDB clients.
-//!
-//! DuckDB's `ATTACH` pushes whole queries to the server and shows the results as
-//! they come back, so they should have the values and types DuckDB itself would
-//! give. Where DuckDB and DataFusion differ, a planner extension and two aggregate
-//! overrides apply DuckDB's rules:
-//!
-//! | Expression | DataFusion | DuckDB (applied here) |
-//! |---|---|---|
-//! | integer or decimal `/` integer or decimal | integer / decimal | `DOUBLE` |
-//! | `DATE ± INTERVAL` | `DATE` | `TIMESTAMP` |
-//! | `DATE ± integer` | error | `DATE` (days) |
-//! | `DATE - DATE` | interval | `BIGINT` (days) |
-//! | integer `//` integer | not supported | integer, truncated toward zero |
-//! | `avg(DECIMAL)` | `DECIMAL(p+4, s+4)` | `DOUBLE` |
-//!
-//! These are DuckDB's semantics, not DataFusion's, so they belong only in sessions
-//! of DuckDB clients. A DataFusion client (the Quack table provider) plans with
-//! DataFusion's rules and expects its pushed-down SQL to keep them.
-//!
-//! One rule applies to every session ([`wide_sum_udaf`]): `sum` of integers returns
-//! `DECIMAL(38,0)`, as DuckDB returns `HUGEINT`, rather than wrapping on overflow. A
-//! client that expects a narrower type (the table provider casts results to its plan's
-//! types) then gets an error instead of a wrong sum.
 
 use std::sync::Arc;
 
@@ -39,7 +16,32 @@ use datafusion::logical_expr::{
 };
 use datafusion::sql::sqlparser::ast::BinaryOperator;
 
-/// `state`, with DuckDB's result types (see the module docs).
+/// `state`, with DuckDB's result types.
+///
+/// DuckDB's `ATTACH` pushes whole queries to the server and shows the results as they
+/// come back, so they should have the values and types DuckDB itself would give.
+/// Where DuckDB and DataFusion differ, a planner extension and an aggregate override
+/// apply DuckDB's rules:
+///
+/// | Expression | DataFusion | DuckDB (applied here) |
+/// |---|---|---|
+/// | integer or decimal `/` integer or decimal | integer / decimal | `DOUBLE` |
+/// | `DATE ± INTERVAL` | `DATE` | `TIMESTAMP` |
+/// | `DATE ± integer` | error | `DATE` (days) |
+/// | `DATE - DATE` | interval | `BIGINT` (days) |
+/// | integer `//` integer | not supported | integer, truncated toward zero |
+/// | `avg(DECIMAL)` | `DECIMAL(p+4, s+4)` | `DOUBLE` |
+///
+/// These are DuckDB's semantics, not DataFusion's, so they belong only in sessions
+/// of DuckDB clients. A DataFusion client (the Quack table provider) plans with
+/// DataFusion's rules and expects its pushed-down SQL to keep them.
+///
+/// One rule applies to every session, through [`register_duckdb_functions`]: `sum` of
+/// integers returns `DECIMAL(38,0)`, as DuckDB returns `HUGEINT`, rather than wrapping
+/// on overflow. A client that expects a narrower type (the table provider casts results
+/// to its plan's types) then gets an error instead of a wrong sum.
+///
+/// [`register_duckdb_functions`]: crate::register_duckdb_functions
 pub fn duckdb_client_semantics(state: SessionState) -> Result<SessionState> {
     let mut planners: Vec<Arc<dyn ExprPlanner>> = vec![Arc::new(DuckDbExprPlanner::new(&state))];
     planners.extend(state.expr_planners().iter().cloned());

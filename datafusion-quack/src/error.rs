@@ -9,6 +9,7 @@ use datafusion::error::DataFusionError;
 
 /// A DuckDB exception type, as DuckDB names it on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExceptionType {
     /// `Binder`: an unknown column, or a plan that doesn't type-check.
     Binder,
@@ -68,6 +69,7 @@ impl ExceptionType {
 /// An error sent to a client as an ERROR_RESPONSE.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{} Error: {message}", exception_type.name())]
+#[non_exhaustive]
 pub struct ClientError {
     /// The DuckDB exception type.
     pub exception_type: ExceptionType,
@@ -137,7 +139,7 @@ impl From<arrow_quack::Error> for ClientError {
         let exception_type = match &error {
             arrow_quack::Error::Unsupported { .. } => ExceptionType::NotImplemented,
             arrow_quack::Error::Arrow(arrow) => arrow_exception_type(arrow),
-            arrow_quack::Error::Protocol(_) => ExceptionType::Internal,
+            _ => ExceptionType::Internal,
         };
         Self::new(exception_type, error.to_string())
     }
@@ -164,6 +166,7 @@ fn arrow_exception_type(error: &ArrowError) -> ExceptionType {
 
 /// An error that stops the server from starting or running.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ServerError {
     /// Binding or serving the socket failed.
     #[error("I/O error: {0}")]

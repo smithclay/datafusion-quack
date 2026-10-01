@@ -11,6 +11,7 @@ use crate::auth::SessionInfo;
 use crate::error::ClientError;
 
 /// What a statement produced.
+#[non_exhaustive]
 pub enum QueryOutput {
     /// Rows. The stream's schema is the result's schema.
     Rows(SendableRecordBatchStream),

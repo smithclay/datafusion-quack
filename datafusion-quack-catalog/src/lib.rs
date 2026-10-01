@@ -50,11 +50,11 @@ use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
 use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 
-pub use functions::{CatalogFunction, DuckDbCatalogFunction, OidRegistry};
-pub use information_schema::DuckDbInformationSchema;
-pub use names::{DuckDbCatalog, DuckDbCatalogList, DuckDbSchema};
-pub use semantics::{DuckDbExprPlanner, duckdb_client_semantics, wide_sum_udaf};
-pub use udfs::{count_star_udaf, current_database_udf, current_schema_udf, length_udf};
+use functions::{CatalogFunction, DuckDbCatalogFunction, OidRegistry};
+pub use names::DuckDbCatalogList;
+pub use semantics::duckdb_client_semantics;
+use semantics::wide_sum_udaf;
+use udfs::{count_star_udaf, current_database_udf, current_schema_udf, length_udf};
 
 /// `state`, made to answer DuckDB clients: DuckDB name resolution and
 /// `information_schema`, the DuckDB dialect, and the functions of
@@ -72,10 +72,10 @@ pub fn duckdb_session_state(state: SessionState) -> Result<SessionState> {
     Ok(state)
 }
 
-/// Registers the DuckDB catalog functions (sharing one [`OidRegistry`]),
-/// `current_database()`, `current_schema()`, `length`, `count_star()`, a `sum` that
-/// can't wrap ([`wide_sum_udaf`]), and the list functions DuckDB's catalog queries
-/// use if the session lacks them.
+/// Registers the DuckDB catalog functions (sharing one registry of oids),
+/// `current_database()`, `current_schema()`, `length`, `count_star()`, a `sum` of
+/// integers that returns `DECIMAL(38,0)` so it can't wrap, and the list functions
+/// DuckDB's catalog queries use if the session lacks them.
 pub fn register_duckdb_functions(state: &mut SessionState) -> Result<()> {
     let oids = Arc::new(OidRegistry::default());
     for function in CatalogFunction::ALL {

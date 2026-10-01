@@ -6,7 +6,7 @@ use std::time::Duration;
 /// The port DuckDB's `quack_serve` listens on by default.
 pub const DEFAULT_PORT: u16 = 9494;
 
-/// Settings for [`serve`](crate::serve) and friends.
+/// Settings for [`serve`](crate::serve) and [`QuackServer`](crate::QuackServer).
 ///
 /// Every limit has a safe default (listed on each method); `0` turns a limit off
 /// where a method says so.

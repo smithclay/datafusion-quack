@@ -24,6 +24,7 @@ use arrow::datatypes::DataType;
 
 /// An error from this crate.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// The Arrow type has no DuckDB counterpart.
     #[error("unsupported Arrow type {data_type}: {reason}")]

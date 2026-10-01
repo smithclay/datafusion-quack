@@ -44,6 +44,7 @@ const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 /// One encoded DuckDB `DataChunk`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EncodedChunk {
     /// The serialized `DataChunk` object.
     pub bytes: Vec<u8>,

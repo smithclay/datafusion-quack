@@ -85,38 +85,12 @@ pub fn duckdb_session_config() -> SessionConfig {
         .set_str("datafusion.sql_parser.dialect", "duckdb")
 }
 
-/// Serves `ctx` until the process stops.
+/// Serves `ctx` until the process stops. For hooks, a custom [`AuthProvider`], a
+/// listener of your own or a shutdown signal, use [`QuackServer`].
 pub async fn serve(ctx: Arc<SessionContext>, options: &ServerOptions) -> Result<(), ServerError> {
     QuackServer::new(ctx)
         .with_options(options.clone())
         .serve()
-        .await
-}
-
-/// Serves `ctx`, answering statements with `hooks` before DataFusion.
-pub async fn serve_with_hooks(
-    ctx: Arc<SessionContext>,
-    options: &ServerOptions,
-    hooks: Vec<Arc<dyn QueryHook>>,
-) -> Result<(), ServerError> {
-    QuackServer::new(ctx)
-        .with_options(options.clone())
-        .with_hooks(hooks)
-        .serve()
-        .await
-}
-
-/// Serves `ctx` on a listener the caller bound, e.g. to port 0 in a test.
-pub async fn serve_with_listener(
-    listener: TcpListener,
-    ctx: Arc<SessionContext>,
-    options: &ServerOptions,
-    hooks: Vec<Arc<dyn QueryHook>>,
-) -> Result<(), ServerError> {
-    QuackServer::new(ctx)
-        .with_options(options.clone())
-        .with_hooks(hooks)
-        .serve_with_listener(listener)
         .await
 }
 
