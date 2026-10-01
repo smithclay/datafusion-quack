@@ -105,8 +105,9 @@ pub(crate) struct Session {
     pub(crate) ctx: SessionContext,
     heartbeat_timeout: Duration,
     lease_renewed: Mutex<Instant>,
-    /// Cancels the statement that runs now, from its PREPARE to its last FETCH.
-    running: Mutex<Option<CancelHandle>>,
+    /// The statement that runs now, from its PREPARE to its last FETCH: its query
+    /// uuid, and what cancels it.
+    running: Mutex<Option<(HugeIntParts, CancelHandle)>>,
     /// Held for the whole of a PREPARE, so a session runs one statement at a time.
     pub(crate) statement: tokio::sync::Mutex<StatementSlot>,
 }
@@ -144,35 +145,42 @@ impl Session {
         true
     }
 
-    /// Starts a statement: cancels the one before it, and returns the new one's handle.
-    pub(crate) fn begin_statement(&self) -> CancelHandle {
+    /// Starts statement `uuid`: cancels the one before it, and returns the new one's
+    /// handle.
+    pub(crate) fn begin_statement(&self, uuid: HugeIntParts) -> CancelHandle {
         let handle = CancelHandle::new();
         let previous = self
             .running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .replace(handle.clone());
-        if let Some(previous) = previous {
+            .replace((uuid, handle.clone()));
+        if let Some((_, previous)) = previous {
             previous.cancel();
         }
         handle
     }
 
-    /// Cancels the statement that runs now, if any.
-    pub(crate) fn cancel_running(&self) {
-        if let Some(handle) = self
-            .running
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            handle.cancel();
+    /// Cancels the statement that runs now, if `matches` its uuid. Returns the uuid
+    /// of a running statement that didn't match; nothing is cancelled then.
+    pub(crate) fn cancel_running(
+        &self,
+        matches: impl FnOnce(HugeIntParts) -> bool,
+    ) -> Result<(), HugeIntParts> {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        match running.as_ref() {
+            Some((uuid, _)) if !matches(*uuid) => Err(*uuid),
+            _ => {
+                if let Some((_, handle)) = running.take() {
+                    handle.cancel();
+                }
+                Ok(())
+            }
         }
     }
 
     /// Cancels the running statement, e.g. because the session ended.
     fn abort(&self, reason: &str) {
-        self.cancel_running();
+        let _ = self.cancel_running(|_| true);
         if let Ok(mut slot) = self.statement.try_lock() {
             slot.abort(ClientError::interrupted(reason));
         }

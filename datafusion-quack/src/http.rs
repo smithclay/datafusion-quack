@@ -75,11 +75,12 @@ pub(crate) async fn run(
     dispatcher: Arc<Dispatcher>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServerError> {
-    let reaper = tokio::spawn(reap(Arc::clone(&dispatcher)));
     let tls = match dispatcher.options.tls() {
         Some((cert, key)) => Some(tls_acceptor(cert, key)?),
         None => None,
     };
+    // after anything that can fail, so an early return can't leave it running
+    let reaper = tokio::spawn(reap(Arc::clone(&dispatcher)));
     let app = router(Arc::clone(&dispatcher));
     let result = match tls {
         None => axum::serve(listener, app)

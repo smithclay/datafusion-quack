@@ -10,6 +10,7 @@
 //! at most `max_inflight_batches` past the last acknowledged one.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
@@ -127,6 +128,8 @@ pub(crate) struct Cursor {
     max_inflight_batches: u64,
     cancel: CancelHandle,
     last_activity: Mutex<Instant>,
+    /// FETCHes in progress.
+    fetching: AtomicUsize,
     state: tokio::sync::Mutex<CursorState>,
 }
 
@@ -144,6 +147,7 @@ impl Cursor {
             max_inflight_batches,
             cancel,
             last_activity: Mutex::new(Instant::now()),
+            fetching: AtomicUsize::new(0),
             state: tokio::sync::Mutex::new(CursorState {
                 source: producer.map_or(Source::Finished, Source::Running),
                 produced: prepare_batches,
@@ -158,7 +162,11 @@ impl Cursor {
         self.cancel.cancel();
     }
 
+    /// How long since the last FETCH; zero while one is running.
     pub(crate) fn idle_for(&self, now: Instant) -> std::time::Duration {
+        if self.fetching.load(Ordering::Acquire) > 0 {
+            return std::time::Duration::ZERO;
+        }
         let last = *self
             .last_activity
             .lock()
@@ -186,10 +194,21 @@ impl Cursor {
             ));
         }
         self.touch();
+        // a FETCH that takes a long time to produce its batch isn't idle
+        self.fetching.fetch_add(1, Ordering::AcqRel);
+        let _fetching = scopeguard(|| {
+            self.fetching.fetch_sub(1, Ordering::AcqRel);
+        });
         let dense = batch_index.saturating_add(self.prepare_batches);
         let dense_ack = ack_index.saturating_add(self.prepare_batches);
 
         let mut state = self.state.lock().await;
+        if dense_ack > state.produced {
+            // an ack of batches never sent would let the read-ahead limit run unbounded
+            return Err(ClientError::invalid_input(format!(
+                "FETCH acknowledges batch {ack_index}, which hasn't been sent"
+            )));
+        }
         if dense_ack > state.acked {
             state.acked = dense_ack;
             state.served = state.served.split_off(&(dense_ack + 1));
@@ -207,7 +226,7 @@ impl Cursor {
             )));
         }
         let running = matches!(state.source, Source::Running(_));
-        if running && dense - state.acked > self.max_inflight_batches {
+        if running && dense.saturating_sub(state.acked) > self.max_inflight_batches {
             return Err(ClientError::invalid_input(format!(
                 "FETCH of batch {batch_index} is more than {} batches past the last acknowledged one",
                 self.max_inflight_batches
@@ -247,6 +266,20 @@ impl Cursor {
             }
         }
     }
+}
+
+/// Runs `f` when dropped, so it runs however the FETCH ends (an early return, an
+/// error, or a dropped request).
+fn scopeguard(f: impl FnOnce()) -> impl Drop {
+    struct Guard<F: FnOnce()>(Option<F>);
+    impl<F: FnOnce()> Drop for Guard<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.0.take() {
+                f();
+            }
+        }
+    }
+    Guard(Some(f))
 }
 
 fn serve(
@@ -362,6 +395,37 @@ mod tests {
             decoded(&cursor.fetch(3, 2).await.unwrap()),
             (0, Some(2), None)
         );
+    }
+
+    #[tokio::test]
+    async fn acks_of_unsent_batches_are_refused() {
+        let cursor = cursor(5, 0);
+        // would otherwise lift the read-ahead limit to a million batches
+        let error = cursor.fetch(1_000_001, 1_000_000).await.unwrap_err();
+        assert!(error.message.contains("hasn't been sent"), "{error}");
+        assert!(cursor.fetch(1, u64::MAX).await.is_err());
+        assert!(cursor.fetch(u64::MAX, 0).await.is_err());
+        // the cursor still serves in order
+        assert_eq!(decoded(&cursor.fetch(1, 0).await.unwrap()).2, Some(1));
+    }
+
+    #[tokio::test]
+    async fn a_running_fetch_is_not_idle() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, false)]));
+        let stream = RecordBatchStreamAdapter::new(schema, futures::stream::pending());
+        let cancel = CancelHandle::new();
+        let producer = BatchProducer::new(Box::pin(stream), cancel.clone(), 1);
+        let cursor = Arc::new(Cursor::new(Some(producer), 0, 4, cancel));
+        let fetching = tokio::spawn({
+            let cursor = Arc::clone(&cursor);
+            async move { cursor.fetch(1, 0).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let later = Instant::now() + std::time::Duration::from_secs(3600);
+        assert_eq!(cursor.idle_for(later), std::time::Duration::ZERO);
+        fetching.abort();
+        let _ = fetching.await;
+        assert!(cursor.idle_for(later) > std::time::Duration::from_secs(3000));
     }
 
     #[tokio::test]

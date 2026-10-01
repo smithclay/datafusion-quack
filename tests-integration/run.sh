@@ -26,7 +26,7 @@ mkdir -p "$CACHE" "$OUT"
 DUCKDB_STAGED=${DUCKDB_STAGED:-09eb7f7004/v2.0.0-alpha43586}
 QUACK_PROTOCOL_REPO=${QUACK_PROTOCOL_REPO:-https://github.com/smithclay/quack_protocol_rs}
 # feat/server-feature
-QUACK_PROTOCOL_REV=${QUACK_PROTOCOL_REV:-51c5dbc1ca7cd11ab611c3014ff136a09c2c4c8e}
+QUACK_PROTOCOL_REV=${QUACK_PROTOCOL_REV:-5b9317672418f4f36a0285e06230afac8849c925}
 PROVIDERS_REPO=${PROVIDERS_REPO:-https://github.com/smithclay/datafusion-table-providers}
 # feat/quack-seed-mode
 PROVIDERS_REV=${PROVIDERS_REV:-7e05ff28c506b2e73fa19c01c732285fd427faad}

@@ -369,3 +369,118 @@ async fn sessions_without_heartbeats_expire() {
         "{message}"
     );
 }
+
+fn prepare_with(connection_id: &str, uuid: u64, sql: &str, inline_rows: u64) -> Vec<u8> {
+    encode_response(&QuackMessage::PrepareRequest {
+        header: MessageHeader::new(MessageType::PrepareRequest).with_connection(connection_id),
+        sql: sql.into(),
+        query_uuid: Some(HugeIntParts {
+            upper: 0,
+            lower: uuid,
+        }),
+        inline_rows: Some(inline_rows),
+    })
+    .unwrap()
+}
+
+fn cancel_request(connection_id: &str, uuid: u64) -> Vec<u8> {
+    encode_response(&QuackMessage::CancelRequest {
+        header: MessageHeader::new(MessageType::CancelRequest).with_connection(connection_id),
+        query_uuid: HugeIntParts {
+            upper: 0,
+            lower: uuid,
+        },
+    })
+    .unwrap()
+}
+
+fn fetch_request(connection_id: &str, uuid: u64, batch_index: u64) -> Vec<u8> {
+    encode_response(&QuackMessage::FetchRequest {
+        header: MessageHeader::new(MessageType::FetchRequest).with_connection(connection_id),
+        result_uuid: HugeIntParts {
+            upper: 0,
+            lower: uuid,
+        },
+        batch_index: Some(batch_index),
+        ack_index: Some(batch_index - 1),
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_stale_cancel_leaves_the_running_query_alone() {
+    let server =
+        TestServer::start(SessionContext::new(), options().with_batch_target_bytes(1)).await;
+    let id = open_session(&server).await;
+    post(
+        &server,
+        prepare_with(&id, 1, "SELECT * FROM range(100000)", 0),
+    )
+    .await;
+    post(
+        &server,
+        prepare_with(&id, 2, "SELECT * FROM range(100000)", 0),
+    )
+    .await;
+    // a late CANCEL of query 1 must not stop query 2
+    let message = error_message(post(&server, cancel_request(&id, 1)).await);
+    assert!(message.contains("different query"), "{message}");
+    assert!(matches!(
+        post(&server, fetch_request(&id, 2, 1)).await,
+        QuackMessage::FetchResponse { .. }
+    ));
+}
+
+#[tokio::test]
+async fn cancel_stops_a_long_ddl_statement() {
+    let server = TestServer::start(SessionContext::new(), options()).await;
+    let id = open_session(&server).await;
+    let prepare = tokio::spawn({
+        let url = server.url.clone();
+        let body = prepare_with(
+            &id,
+            1,
+            "CREATE TABLE big AS SELECT value AS v FROM range(10000000000)",
+            0,
+        );
+        async move { post_bytes(&url, body).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let cancelled = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        post(&server, cancel_request(&id, 0)),
+    )
+    .await
+    .expect("CANCEL answers while the DDL runs");
+    assert!(matches!(cancelled, QuackMessage::SuccessResponse { .. }));
+    let prepared = tokio::time::timeout(std::time::Duration::from_secs(10), prepare)
+        .await
+        .expect("the DDL stops")
+        .unwrap();
+    let message = error_message(decode_request(&prepared).unwrap());
+    assert!(message.contains("Interrupted"), "{message}");
+}
+
+#[tokio::test]
+async fn clients_cannot_raise_the_inline_row_limit() {
+    let server = TestServer::start(
+        SessionContext::new(),
+        options().with_inline_rows(10).with_batch_target_bytes(1),
+    )
+    .await;
+    let id = open_session(&server).await;
+    let QuackMessage::PrepareResponse {
+        needs_more_fetch,
+        results,
+        ..
+    } = post(
+        &server,
+        prepare_with(&id, 1, "SELECT * FROM range(100000)", u64::MAX),
+    )
+    .await
+    else {
+        panic!("prepare failed");
+    };
+    assert!(needs_more_fetch);
+    assert!(results.iter().map(|c| c.row_count).sum::<usize>() < 100_000);
+}

@@ -214,7 +214,7 @@ impl Dispatcher {
     ) -> Result<Bytes, ClientError> {
         self.auth.authorize(&session.info, sql).await?;
         // stop the previous statement first, so a FETCH it holds lets go of the slot
-        let cancel = session.begin_statement();
+        let cancel = session.begin_statement(uuid);
         let mut slot = session.statement.lock().await;
         *slot = StatementSlot {
             uuid: Some(uuid),
@@ -223,7 +223,12 @@ impl Dispatcher {
         };
         tracing::debug!(connection_id = %session.info.connection_id, sql, "prepare");
 
-        let output = self.run_sql(session, sql, &cancel).await?;
+        // a cancel stops planning and DDL too: the statement is dropped mid-run
+        let output = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(ClientError::cancelled()),
+            output = self.run_sql(session, sql, &cancel) => output?,
+        };
         let (schema, stream) = match output {
             QueryOutput::Rows(stream) => (stream.schema(), stream),
             QueryOutput::Success => {
@@ -242,7 +247,10 @@ impl Dispatcher {
             BatchProducer::new(stream, cancel.clone(), self.options.batch_target_bytes());
 
         // the leading batches go inline, so a small result takes one round trip
-        let max_inline_rows = inline_rows.unwrap_or(self.options.inline_rows());
+        // a client may ask for fewer inline rows, not more than the server allows
+        let max_inline_rows = inline_rows.map_or(self.options.inline_rows(), |rows| {
+            rows.min(self.options.inline_rows())
+        });
         let mut chunks = Vec::new();
         let mut rows = 0u64;
         let mut consumed = 0u64;
@@ -350,7 +358,15 @@ impl Dispatcher {
     }
 
     async fn cancel(&self, session: &Session, uuid: HugeIntParts) -> Result<Bytes, ClientError> {
-        session.cancel_running();
+        // check the uuid before stopping anything: a late CANCEL of an earlier query
+        // must not stop the one running now. A zero uuid cancels whatever runs.
+        session
+            .cancel_running(|running| uuid == ZERO_UUID || running == uuid)
+            .map_err(|running| {
+                ClientError::invalid_input(format!(
+                    "Attempted to cancel a different query with id '{uuid}' instead of '{running}'"
+                ))
+            })?;
         let mut slot = session.statement.lock().await;
         if uuid != ZERO_UUID && slot.uuid.is_some_and(|current| current != uuid) {
             return Err(ClientError::invalid_input(format!(
