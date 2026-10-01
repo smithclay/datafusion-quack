@@ -9,3 +9,7 @@ fuzz/Cargo.lock
 
 # agent reference notes, not part of the project
 docs/mvp-plan.md
+
+# Python bytecode from the integration scripts
+__pycache__/
+*.pyc
