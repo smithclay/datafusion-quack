@@ -2907,6 +2907,7 @@ dependencies = [
 [[package]]
 name = "quack_protocol"
 version = "0.3.0"
+source = "git+https://github.com/smithclay/quack_protocol_rs?rev=5c5f4f785c79d8a34beadfb172ae13f21dcdadb5#5c5f4f785c79d8a34beadfb172ae13f21dcdadb5"
 dependencies = [
  "async-stream",
  "base64 0.22.1",

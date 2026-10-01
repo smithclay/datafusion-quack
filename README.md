@@ -18,7 +18,7 @@ DataFusion Quack table provider ───────┘    (HTTP POST /quack)  
 Serve files with the command-line server:
 
 ```sh
-cargo install datafusion-quack-cli
+cargo install --git https://github.com/smithclay/datafusion-quack datafusion-quack-cli
 datafusion-quack --token s3cret-token --parquet lineitem:lineitem.parquet --csv trips:trips.csv
 ```
 

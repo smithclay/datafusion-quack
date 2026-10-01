@@ -101,9 +101,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # --no-verify until quack_protocol's `server` feature is on crates.io: the
-      # packaged manifests name the released version, which lacks it
-      - run: cargo package --workspace --locked --no-verify
+      # Until quack_protocol's `server` feature is on crates.io, a packaged manifest
+      # can't resolve (it names the released 0.3, which lacks the feature), so this
+      # checks what each crate would ship. Then: cargo package --workspace --locked.
+      - run: cargo package --workspace --locked --list
 
   deny:
     runs-on: ubuntu-latest

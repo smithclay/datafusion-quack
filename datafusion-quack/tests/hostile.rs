@@ -336,7 +336,13 @@ async fn banner_and_cors_preflight() {
     let base = server.url.trim_end_matches("/quack").to_string();
     let banner = reqwest::get(&base).await.unwrap();
     assert_eq!(banner.status(), 200);
-    assert!(banner.text().await.unwrap().contains("DuckDB Quack RPC endpoint"));
+    assert!(
+        banner
+            .text()
+            .await
+            .unwrap()
+            .contains("DuckDB Quack RPC endpoint")
+    );
 
     let preflight = reqwest::Client::new()
         .request(reqwest::Method::OPTIONS, &server.url)

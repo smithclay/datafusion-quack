@@ -26,10 +26,10 @@ mkdir -p "$CACHE" "$OUT"
 DUCKDB_STAGED=${DUCKDB_STAGED:-09eb7f7004/v2.0.0-alpha43586}
 QUACK_PROTOCOL_REPO=${QUACK_PROTOCOL_REPO:-https://github.com/smithclay/quack_protocol_rs}
 # feat/server-feature
-QUACK_PROTOCOL_REV=${QUACK_PROTOCOL_REV:-5c5f4f7}
+QUACK_PROTOCOL_REV=${QUACK_PROTOCOL_REV:-5c5f4f785c79d8a34beadfb172ae13f21dcdadb5}
 PROVIDERS_REPO=${PROVIDERS_REPO:-https://github.com/smithclay/datafusion-table-providers}
 # feat/quack-seed-mode
-PROVIDERS_REV=${PROVIDERS_REV:-7e05ff2}
+PROVIDERS_REV=${PROVIDERS_REV:-7e05ff28c506b2e73fa19c01c732285fd427faad}
 ONLY=${ONLY:-attach,differential,client,provider}
 TOKEN=integration-token
 SEEDED_PORT=${SEEDED_PORT:-19494}

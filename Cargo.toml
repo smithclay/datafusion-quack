@@ -33,8 +33,9 @@ futures = "0.3"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
 proptest = "1"
-# The server feature is not on crates.io yet; see docs/mvp-plan.md, decision 1.
-quack_protocol = { path = "../../../../private/tmp/claude-501/-Users-clay-workspace-datafusion-quack/1124c835-2194-4f67-9961-6f9e82447944/scratchpad/qp", default-features = false, features = ["server"] }
+# The `server` feature isn't on crates.io yet, so this is a rev of the fork that adds it
+# (docs/mvp-plan.md, decision 1). `version` is what a published crate will need.
+quack_protocol = { version = "0.3", git = "https://github.com/smithclay/quack_protocol_rs", rev = "5c5f4f785c79d8a34beadfb172ae13f21dcdadb5", default-features = false, features = ["server"] }
 rand = "0.9"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 subtle = "2"
