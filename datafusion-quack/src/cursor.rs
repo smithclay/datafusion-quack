@@ -80,6 +80,9 @@ pub(crate) struct BatchProducer {
     stream: SendableRecordBatchStream,
     cancel: CancelHandle,
     target_bytes: usize,
+    /// The batch being gathered. It lives here, not in `next`, so a FETCH dropped
+    /// mid-gather (the client gave up) leaves the rows it pulled for the retry.
+    gathering: Batch,
 }
 
 impl BatchProducer {
@@ -92,17 +95,17 @@ impl BatchProducer {
             stream,
             cancel,
             target_bytes,
+            gathering: Batch {
+                chunks: Vec::new(),
+                rows: 0,
+            },
         }
     }
 
-    /// The next batch, `None` at the end of the stream.
+    /// The next batch, `None` at the end of the stream. Cancel-safe: dropping the
+    /// future loses no rows.
     pub(crate) async fn next(&mut self) -> Result<Option<Batch>, ClientError> {
-        let mut batch = Batch {
-            chunks: Vec::new(),
-            rows: 0,
-        };
-        let mut bytes = 0;
-        while bytes < self.target_bytes {
+        while self.gathering.bytes() < self.target_bytes {
             if self.cancel.is_cancelled() {
                 return Err(ClientError::cancelled());
             }
@@ -112,13 +115,18 @@ impl BatchProducer {
                 next = self.stream.next() => next,
             };
             let Some(record_batch) = next else { break };
-            let record_batch = record_batch?;
-            for chunk in encode_record_batch(&record_batch)? {
-                bytes += chunk.bytes.len();
-                batch.rows += chunk.rows;
-                batch.chunks.push(chunk);
+            for chunk in encode_record_batch(&record_batch?)? {
+                self.gathering.rows += chunk.rows;
+                self.gathering.chunks.push(chunk);
             }
         }
+        let batch = std::mem::replace(
+            &mut self.gathering,
+            Batch {
+                chunks: Vec::new(),
+                rows: 0,
+            },
+        );
         Ok((!batch.chunks.is_empty()).then_some(batch))
     }
 }
@@ -588,6 +596,43 @@ mod tests {
         assert!(
             cursor.fetch(1, 0).await.is_ok(),
             "batches already held are served"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_fetch_loses_no_rows() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, false)]));
+        let batch = |value: i64| {
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(vec![value; 10]))],
+            )
+            .unwrap())
+        };
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        let stream = RecordBatchStreamAdapter::new(Arc::clone(&schema), receiver);
+        let cancel = CancelHandle::new();
+        // a large target: a FETCH batch gathers record batches until the stream ends
+        let producer = BatchProducer::new(Box::pin(stream), cancel.clone(), 1 << 30);
+        let cursor = Cursor::new(Some(producer), 0, 4, cancel, unbounded());
+
+        sender.unbounded_send(batch(1)).unwrap();
+        // the client gives up on the FETCH after the first record batch was pulled
+        let abandoned =
+            tokio::time::timeout(std::time::Duration::from_millis(50), cursor.fetch(1, 0)).await;
+        assert!(abandoned.is_err());
+        sender.unbounded_send(batch(2)).unwrap();
+        drop(sender);
+
+        let QuackMessage::FetchResponse { results, .. } =
+            decode_request(&cursor.fetch(1, 0).await.unwrap()).unwrap()
+        else {
+            panic!("not a FETCH_RESPONSE");
+        };
+        let rows: usize = results.iter().map(|chunk| chunk.row_count).sum();
+        assert_eq!(
+            rows, 20,
+            "the retry has the rows the abandoned FETCH pulled"
         );
     }
 
