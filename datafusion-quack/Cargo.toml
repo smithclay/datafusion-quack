@@ -12,6 +12,10 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+# `fuzzing::Harness`, a request handler without HTTP, for the fuzz targets.
+fuzzing = []
+
 [dependencies]
 arrow = { workspace = true }
 arrow-quack = { workspace = true }
@@ -39,6 +43,7 @@ datafusion = { workspace = true, features = ["sql", "nested_expressions", "strin
 quack_protocol = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["test-util"] }
 reqwest = { version = "0.12", default-features = false }
+proptest = { workspace = true }
 
 [lints]
 workspace = true

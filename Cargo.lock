@@ -1621,6 +1621,7 @@ dependencies = [
  "futures",
  "hyper",
  "hyper-util",
+ "proptest",
  "quack_protocol",
  "rand 0.9.5",
  "reqwest",

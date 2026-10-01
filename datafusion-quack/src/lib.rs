@@ -38,6 +38,8 @@ mod auth;
 mod cursor;
 mod dispatch;
 mod error;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 mod hooks;
 mod http;
 mod options;

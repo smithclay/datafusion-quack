@@ -8,7 +8,9 @@ use arrow_quack::{EncodedChunk, arrow_to_logical_type};
 use bytes::Bytes;
 use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::sqlparser::dialect::{Dialect, dialect_from_str};
-use futures::StreamExt;
+use std::panic::AssertUnwindSafe;
+
+use futures::{FutureExt, StreamExt};
 use quack_protocol::LogicalTypes;
 use quack_protocol::server::{
     BinaryReader, HugeIntParts, MessageHeader, MessageType, QUACK_VERSION, QuackMessage,
@@ -48,13 +50,22 @@ impl std::fmt::Debug for SessionStore {
 }
 
 impl Dispatcher {
-    /// Answers one request body. Never fails: errors become an ERROR_RESPONSE.
+    /// Answers one request body. Never fails: errors become an ERROR_RESPONSE, and so
+    /// does a panic, so a bug answers one request with an error rather than dropping
+    /// the connection.
     pub(crate) async fn handle(&self, body: &[u8]) -> Bytes {
-        match self.dispatch(body).await {
-            Ok(response) => response,
-            Err(error) => {
+        match AssertUnwindSafe(self.dispatch(body)).catch_unwind().await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
                 tracing::debug!(%error, "request failed");
                 error_response(&error)
+            }
+            Err(_) => {
+                tracing::error!("panic while handling a request");
+                error_response(&ClientError::new(
+                    crate::error::ExceptionType::Internal,
+                    "the server failed while handling the request",
+                ))
             }
         }
     }
