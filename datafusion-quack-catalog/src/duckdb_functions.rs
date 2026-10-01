@@ -152,7 +152,7 @@ fn with_system_aliases<F: ?Sized>(
         let claims =
             std::iter::once(name(function)).chain(aliases(function).iter().map(String::as_str));
         for key in claims {
-            if let Some(owner) = registry.get(key).and_then(&index)
+            if let Some(owner) = registry.get(key).and_then(index)
                 && owner != claimer
                 && !after[claimer].contains(&owner)
             {
