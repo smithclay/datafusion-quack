@@ -156,12 +156,13 @@ impl QuackServer {
     }
 
     fn dispatcher(self) -> Arc<Dispatcher> {
-        let auth = self
-            .auth
-            .unwrap_or_else(|| Arc::new(TokenAuth::new(self.options.token().map(String::from))));
-        if self.options.token().is_none() {
-            tracing::warn!("no token is set: every client may connect");
-        }
+        let auth = self.auth.unwrap_or_else(|| {
+            // a custom provider decides for itself; only the default can be open
+            if self.options.token().is_none() {
+                tracing::warn!("no token is set: every client may connect");
+            }
+            Arc::new(TokenAuth::new(self.options.token().map(String::from)))
+        });
         Arc::new(Dispatcher {
             sessions: SessionStore::new(self.options.max_sessions()),
             options: self.options,
