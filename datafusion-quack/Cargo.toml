@@ -38,6 +38,7 @@ tracing = { workspace = true }
 datafusion = { workspace = true, features = ["sql", "nested_expressions", "string_expressions", "unicode_expressions", "datetime_expressions", "math_expressions"] }
 quack_protocol = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["test-util"] }
+reqwest = { version = "0.12", default-features = false }
 
 [lints]
 workspace = true

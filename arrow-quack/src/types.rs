@@ -350,12 +350,19 @@ mod tests {
             "TIMESTAMP_MS"
         );
         assert_eq!(
-            name(DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))),
+            name(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("UTC".into())
+            )),
             "TIMESTAMP WITH TIME ZONE"
         );
         assert_eq!(name(DataType::Time64(TimeUnit::Nanosecond)), "TIME_NS");
         assert_eq!(
-            name(DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))),
+            name(DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Int32,
+                true
+            )))),
             "INTEGER[]"
         );
         assert_eq!(

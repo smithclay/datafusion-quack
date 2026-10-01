@@ -171,7 +171,12 @@ fn assert_round_trips(columns: Vec<ArrayRef>) {
     let batch = batch_of(columns);
     let actual = round_trip(&batch);
     for (index, column) in batch.columns().iter().enumerate() {
-        assert_eq!(actual[index], expected(column), "column {index} ({})", column.data_type());
+        assert_eq!(
+            actual[index],
+            expected(column),
+            "column {index} ({})",
+            column.data_type()
+        );
     }
 }
 
@@ -203,8 +208,18 @@ fn column(len: usize) -> BoxedStrategy<ArrayRef> {
         opt(any::<f64>(), len).prop_map(|v| Arc::new(Float64Array::from(v)) as ArrayRef),
         (opt(-9_999i128..=9_999, len), Just(4u8), 0i8..=4).prop_map(decimal),
         (opt(-999_999_999i128..=999_999_999, len), Just(9u8), 0i8..=9).prop_map(decimal),
-        (opt(-(10i128.pow(18) - 1)..10i128.pow(18), len), Just(18u8), 0i8..=18).prop_map(decimal),
-        (opt(-(10i128.pow(38) - 1)..10i128.pow(38), len), Just(38u8), 0i8..=38).prop_map(decimal),
+        (
+            opt(-(10i128.pow(18) - 1)..10i128.pow(18), len),
+            Just(18u8),
+            0i8..=18
+        )
+            .prop_map(decimal),
+        (
+            opt(-(10i128.pow(38) - 1)..10i128.pow(38), len),
+            Just(38u8),
+            0i8..=38
+        )
+            .prop_map(decimal),
         opt(utf8(), len).prop_map(|v| Arc::new(StringArray::from(v)) as ArrayRef),
         opt(utf8(), len).prop_map(|v| Arc::new(LargeStringArray::from(v)) as ArrayRef),
         opt(utf8(), len).prop_map(|v| Arc::new(StringViewArray::from(v)) as ArrayRef),
@@ -235,14 +250,27 @@ fn column(len: usize) -> BoxedStrategy<ArrayRef> {
                     .collect::<Vec<_>>(),
             )) as ArrayRef
         }),
-        opt(prop::collection::vec(prop::option::of(any::<i32>()), 0..5), len).prop_map(|v| {
+        opt(
+            prop::collection::vec(prop::option::of(any::<i32>()), 0..5),
+            len
+        )
+        .prop_map(|v| {
             Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(v)) as ArrayRef
         }),
-        opt(prop::collection::vec(prop::option::of(any::<i16>()), 3), len).prop_map(|v| {
-            Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(v, 3))
-                as ArrayRef
+        opt(
+            prop::collection::vec(prop::option::of(any::<i16>()), 3),
+            len
+        )
+        .prop_map(|v| {
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int16Type, _, _>(
+                v, 3,
+            )) as ArrayRef
         }),
-        (opt(any::<i32>(), len), opt(utf8(), len), prop::collection::vec(any::<bool>(), len))
+        (
+            opt(any::<i32>(), len),
+            opt(utf8(), len),
+            prop::collection::vec(any::<bool>(), len)
+        )
             .prop_map(|(a, b, valid)| {
                 let fields = Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
@@ -250,7 +278,10 @@ fn column(len: usize) -> BoxedStrategy<ArrayRef> {
                 ]);
                 Arc::new(StructArray::new(
                     fields,
-                    vec![Arc::new(Int32Array::from(a)), Arc::new(StringArray::from(b))],
+                    vec![
+                        Arc::new(Int32Array::from(a)),
+                        Arc::new(StringArray::from(b)),
+                    ],
                     Some(NullBuffer::from(valid)),
                 )) as ArrayRef
             }),
@@ -268,13 +299,7 @@ fn decimal((values, precision, scale): (Vec<Option<i128>>, u8, i8)) -> ArrayRef 
 
 fn batch_strategy() -> impl Strategy<Value = (Vec<ArrayRef>, usize, usize)> {
     (1usize..2500)
-        .prop_flat_map(|len| {
-            (
-                prop::collection::vec(column(len), 1..4),
-                0..len,
-                Just(len),
-            )
-        })
+        .prop_flat_map(|len| (prop::collection::vec(column(len), 1..4), 0..len, Just(len)))
         .prop_flat_map(|(columns, offset, len)| (Just(columns), Just(offset), 0..=len - offset))
 }
 
@@ -326,7 +351,10 @@ fn sliced_list_with_offsets_round_trips() {
         Some(vec![Some(4), None, Some(5)]),
     ]);
     let strings = StringArray::from(vec![Some("a"), None, Some("ccc"), Some(""), Some("e")]);
-    assert_round_trips(vec![Arc::new(list.slice(2, 3)), Arc::new(strings.slice(1, 4).slice(0, 3))]);
+    assert_round_trips(vec![
+        Arc::new(list.slice(2, 3)),
+        Arc::new(strings.slice(1, 4).slice(0, 3)),
+    ]);
 }
 
 #[test]
@@ -371,8 +399,9 @@ fn nested_lists_structs_and_maps_round_trip() {
 
 #[test]
 fn dictionaries_are_unpacked() {
-    let dictionary: DictionaryArray<Int16Type> =
-        vec![Some("x"), None, Some("y"), Some("x")].into_iter().collect();
+    let dictionary: DictionaryArray<Int16Type> = vec![Some("x"), None, Some("y"), Some("x")]
+        .into_iter()
+        .collect();
     let batch = batch_of(vec![Arc::new(dictionary)]);
     assert_eq!(
         round_trip(&batch)[0],
@@ -394,17 +423,33 @@ fn null_arrays_are_null_integers() {
 #[test]
 fn other_temporal_types_round_trip() {
     let batch = batch_of(vec![
-        Arc::new(Date64Array::from(vec![Some(86_400_000 * 3), Some(-1), None])),
+        Arc::new(Date64Array::from(vec![
+            Some(86_400_000 * 3),
+            Some(-1),
+            None,
+        ])),
         Arc::new(Time32SecondArray::from(vec![Some(1), Some(2), None])),
         Arc::new(Time64NanosecondArray::from(vec![Some(5), Some(6), None])),
         Arc::new(IntervalYearMonthArray::from(vec![Some(14), Some(-1), None])),
-        Arc::new(DurationMillisecondArray::from(vec![Some(1500), Some(-2), None])),
-        Arc::new(DurationSecondArray::from(vec![Some(139_200), Some(-90_000), None])),
+        Arc::new(DurationMillisecondArray::from(vec![
+            Some(1500),
+            Some(-2),
+            None,
+        ])),
+        Arc::new(DurationSecondArray::from(vec![
+            Some(139_200),
+            Some(-90_000),
+            None,
+        ])),
     ]);
     let values = round_trip(&batch);
     assert_eq!(
         values[0],
-        [Value::Date(DateValue { days: 3 }), Value::Date(DateValue { days: -1 }), Value::Null]
+        [
+            Value::Date(DateValue { days: 3 }),
+            Value::Date(DateValue { days: -1 }),
+            Value::Null
+        ]
     );
     assert_eq!(
         values[1][0],

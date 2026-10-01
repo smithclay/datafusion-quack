@@ -145,9 +145,7 @@ async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
     let address = listener.local_addr()?;
-    tracing::info!(
-        "listening on quack:{address} (ATTACH 'quack:{address}' AS df)",
-    );
+    tracing::info!("listening on quack:{address} (ATTACH 'quack:{address}' AS df)",);
     QuackServer::new(Arc::new(ctx))
         .with_options(options)
         .serve_with_shutdown(listener, async {
@@ -194,7 +192,10 @@ async fn register_dir(ctx: &SessionContext, dir: &Path) -> Result<()> {
         };
         let location = path.to_string_lossy();
         match extension.to_ascii_lowercase().as_str() {
-            "csv" => ctx.register_csv(stem, &location, CsvReadOptions::new()).await?,
+            "csv" => {
+                ctx.register_csv(stem, &location, CsvReadOptions::new())
+                    .await?
+            }
             "parquet" => {
                 ctx.register_parquet(stem, &location, ParquetReadOptions::default())
                     .await?

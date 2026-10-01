@@ -233,7 +233,11 @@ fn type_matrix() -> MemTable {
         Field::new("c_varchar", DataType::Utf8View, true),
         Field::new("c_blob", DataType::BinaryView, true),
         Field::new("c_date", DataType::Date32, true),
-        Field::new("c_ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+        Field::new(
+            "c_ts",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
         Field::new("c_time", DataType::Time64(TimeUnit::Microsecond), true),
         Field::new(
             "c_list",
@@ -249,7 +253,11 @@ fn type_matrix() -> MemTable {
             true,
         ),
     ]));
-    MemTable::try_new(Arc::clone(&schema), vec![vec![RecordBatch::new_empty(schema)]]).unwrap()
+    MemTable::try_new(
+        Arc::clone(&schema),
+        vec![vec![RecordBatch::new_empty(schema)]],
+    )
+    .unwrap()
 }
 
 async fn server() -> (String, tokio::task::JoinHandle<()>) {
@@ -293,7 +301,12 @@ async fn replay(queries: &[&str], duckdb_client: bool) {
     let mut failures = Vec::new();
     for sql in queries {
         let result = match client.query(sql, None).await {
-            Ok(stream) => stream.into_chunks().1.try_collect::<Vec<_>>().await.map(drop),
+            Ok(stream) => stream
+                .into_chunks()
+                .1
+                .try_collect::<Vec<_>>()
+                .await
+                .map(drop),
             Err(error) => Err(error),
         };
         if let Err(error) = result {
@@ -301,7 +314,12 @@ async fn replay(queries: &[&str], duckdb_client: bool) {
         }
     }
     server.abort();
-    assert!(failures.is_empty(), "{} failed:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[tokio::test]

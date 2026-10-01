@@ -11,10 +11,10 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::TableReference;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
-use datafusion::common::TableReference;
 
 /// A named set of fixtures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -38,7 +38,10 @@ fn register(ctx: &SessionContext, name: &str, batch: RecordBatch) -> Result<()> 
 }
 
 fn batch(fields: Vec<Field>, columns: Vec<ArrayRef>) -> Result<RecordBatch> {
-    Ok(RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?)
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new(fields)),
+        columns,
+    )?)
 }
 
 async fn provider_fixtures(ctx: &SessionContext) -> Result<()> {
@@ -142,17 +145,44 @@ fn types() -> Result<RecordBatch> {
     map.append(false)?;
 
     let columns: Vec<(&str, ArrayRef)> = vec![
-        ("c_bool", Arc::new(BooleanArray::from(vec![Some(true), None]))),
+        (
+            "c_bool",
+            Arc::new(BooleanArray::from(vec![Some(true), None])),
+        ),
         ("c_i8", Arc::new(Int8Array::from(vec![Some(i8::MIN), None]))),
-        ("c_i16", Arc::new(Int16Array::from(vec![Some(i16::MIN), None]))),
-        ("c_i32", Arc::new(Int32Array::from(vec![Some(i32::MIN), None]))),
-        ("c_i64", Arc::new(Int64Array::from(vec![Some(i64::MIN), None]))),
-        ("c_u8", Arc::new(UInt8Array::from(vec![Some(u8::MAX), None]))),
-        ("c_u16", Arc::new(UInt16Array::from(vec![Some(u16::MAX), None]))),
-        ("c_u32", Arc::new(UInt32Array::from(vec![Some(u32::MAX), None]))),
-        ("c_u64", Arc::new(UInt64Array::from(vec![Some(u64::MAX), None]))),
+        (
+            "c_i16",
+            Arc::new(Int16Array::from(vec![Some(i16::MIN), None])),
+        ),
+        (
+            "c_i32",
+            Arc::new(Int32Array::from(vec![Some(i32::MIN), None])),
+        ),
+        (
+            "c_i64",
+            Arc::new(Int64Array::from(vec![Some(i64::MIN), None])),
+        ),
+        (
+            "c_u8",
+            Arc::new(UInt8Array::from(vec![Some(u8::MAX), None])),
+        ),
+        (
+            "c_u16",
+            Arc::new(UInt16Array::from(vec![Some(u16::MAX), None])),
+        ),
+        (
+            "c_u32",
+            Arc::new(UInt32Array::from(vec![Some(u32::MAX), None])),
+        ),
+        (
+            "c_u64",
+            Arc::new(UInt64Array::from(vec![Some(u64::MAX), None])),
+        ),
         ("c_f32", Arc::new(Float32Array::from(vec![Some(1.5), None]))),
-        ("c_f64", Arc::new(Float64Array::from(vec![Some(-2.25), None]))),
+        (
+            "c_f64",
+            Arc::new(Float64Array::from(vec![Some(-2.25), None])),
+        ),
         (
             "c_dec4",
             Arc::new(Decimal128Array::from(vec![Some(1234), None]).with_precision_and_scale(4, 2)?),
@@ -167,11 +197,17 @@ fn types() -> Result<RecordBatch> {
         (
             "c_dec38",
             Arc::new(
-                Decimal128Array::from(vec![Some(12_345_678_901_234_567_890_123_456_780_123_456_789), None])
-                    .with_precision_and_scale(38, 10)?,
+                Decimal128Array::from(vec![
+                    Some(12_345_678_901_234_567_890_123_456_780_123_456_789),
+                    None,
+                ])
+                .with_precision_and_scale(38, 10)?,
             ),
         ),
-        ("c_varchar", Arc::new(StringArray::from(vec![Some("héllo 'q'"), None]))),
+        (
+            "c_varchar",
+            Arc::new(StringArray::from(vec![Some("héllo 'q'"), None])),
+        ),
         (
             "c_blob",
             Arc::new(BinaryArray::from(vec![Some(&[0u8, 255][..]), None])),
@@ -179,15 +215,24 @@ fn types() -> Result<RecordBatch> {
         ("c_date", Arc::new(Date32Array::from(vec![Some(1), None]))),
         (
             "c_time",
-            Arc::new(Time64MicrosecondArray::from(vec![Some(86_399_999_999), None])),
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(86_399_999_999),
+                None,
+            ])),
         ),
         (
             "c_time_ns",
-            Arc::new(Time64NanosecondArray::from(vec![Some(3_723_123_456_789), None])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(3_723_123_456_789),
+                None,
+            ])),
         ),
         (
             "c_ts",
-            Arc::new(TimestampMicrosecondArray::from(vec![Some(1_709_210_096_789_012), None])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1_709_210_096_789_012),
+                None,
+            ])),
         ),
         (
             "c_ts_s",
@@ -195,11 +240,17 @@ fn types() -> Result<RecordBatch> {
         ),
         (
             "c_ts_ms",
-            Arc::new(TimestampMillisecondArray::from(vec![Some(1_709_210_096_789), None])),
+            Arc::new(TimestampMillisecondArray::from(vec![
+                Some(1_709_210_096_789),
+                None,
+            ])),
         ),
         (
             "c_ts_ns",
-            Arc::new(TimestampNanosecondArray::from(vec![Some(1_709_210_096_123_456_789), None])),
+            Arc::new(TimestampNanosecondArray::from(vec![
+                Some(1_709_210_096_123_456_789),
+                None,
+            ])),
         ),
         (
             "c_tstz",
@@ -255,7 +306,10 @@ fn types() -> Result<RecordBatch> {
         .iter()
         .map(|(name, column)| Field::new(*name, column.data_type().clone(), true))
         .collect();
-    batch(fields, columns.into_iter().map(|(_, column)| column).collect())
+    batch(
+        fields,
+        columns.into_iter().map(|(_, column)| column).collect(),
+    )
 }
 
 fn nullability() -> Result<RecordBatch> {
@@ -291,7 +345,11 @@ fn pushdown() -> Result<RecordBatch> {
             Field::new("d", DataType::Date32, true),
             Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
             Field::new("ts_s", DataType::Timestamp(TimeUnit::Second, None), true),
-            Field::new("ts_ns", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Field::new(
+                "ts_ns",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
             Field::new(
                 "tstz",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
@@ -303,8 +361,20 @@ fn pushdown() -> Result<RecordBatch> {
         ],
         vec![
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
-            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), None, Some(5)])),
-            Arc::new(UInt64Array::from(vec![Some(1), Some(u64::MAX), Some(5), None, Some(0)])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])),
+            Arc::new(UInt64Array::from(vec![
+                Some(1),
+                Some(u64::MAX),
+                Some(5),
+                None,
+                Some(0),
+            ])),
             Arc::new(
                 Decimal128Array::from(vec![Some(150), Some(-225), Some(0), None, Some(9999)])
                     .with_precision_and_scale(10, 2)?,
@@ -388,7 +458,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count[0].num_rows(), 1);
-        let types = ctx.table("quack_types").await.unwrap().collect().await.unwrap();
+        let types = ctx
+            .table("quack_types")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
         assert_eq!(types[0].num_rows(), 2);
     }
 }

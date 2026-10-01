@@ -61,8 +61,11 @@ pub(crate) fn register(state: &mut SessionState) -> Result<()> {
         OperatorFunction::udf("mod", Operator::Modulo),
     ]
     .into_iter()
-    .chain(IntervalConstructor::all().into_iter().map(ScalarUDF::new_from_impl))
-    {
+    .chain(
+        IntervalConstructor::all()
+            .into_iter()
+            .map(ScalarUDF::new_from_impl),
+    ) {
         if state.udf(udf.name()).is_err() {
             state.register_udf(Arc::new(udf))?;
         }
@@ -321,9 +324,19 @@ mod tests {
             value(&ctx, "SELECT to_seconds(1.5) = INTERVAL '1.5 seconds'").await,
             "true"
         );
-        assert_eq!(value(&ctx, r#"SELECT "system".main."multiply"(3, 4)"#).await, "12");
+        assert_eq!(
+            value(&ctx, r#"SELECT "system".main."multiply"(3, 4)"#).await,
+            "12"
+        );
         assert_eq!(value(&ctx, r#"SELECT "system".main.upper('x')"#).await, "X");
-        assert_eq!(value(&ctx, r#"SELECT "system".main.sum(x) FROM (VALUES (1), (2)) t(x)"#).await, "3");
+        assert_eq!(
+            value(
+                &ctx,
+                r#"SELECT "system".main.sum(x) FROM (VALUES (1), (2)) t(x)"#
+            )
+            .await,
+            "3"
+        );
     }
 
     #[test]
@@ -334,8 +347,14 @@ mod tests {
                 .find(|c| c.name == name)
                 .unwrap()
         };
-        assert_eq!(c("to_years").interval(2.0), Some(IntervalMonthDayNano::new(24, 0, 0)));
-        assert_eq!(c("to_weeks").interval(1.0), Some(IntervalMonthDayNano::new(0, 7, 0)));
+        assert_eq!(
+            c("to_years").interval(2.0),
+            Some(IntervalMonthDayNano::new(24, 0, 0))
+        );
+        assert_eq!(
+            c("to_weeks").interval(1.0),
+            Some(IntervalMonthDayNano::new(0, 7, 0))
+        );
         assert_eq!(
             c("to_milliseconds").interval(1.5),
             Some(IntervalMonthDayNano::new(0, 0, 1_500_000))

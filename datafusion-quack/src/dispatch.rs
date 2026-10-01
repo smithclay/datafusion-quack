@@ -79,21 +79,27 @@ impl Dispatcher {
 
         match (message, session) {
             (message @ QuackMessage::ConnectionRequest { .. }, _) => self.connect(message).await,
-            (QuackMessage::PrepareRequest {
-                sql,
-                query_uuid,
-                inline_rows,
-                ..
-            }, Some(session)) => {
+            (
+                QuackMessage::PrepareRequest {
+                    sql,
+                    query_uuid,
+                    inline_rows,
+                    ..
+                },
+                Some(session),
+            ) => {
                 self.prepare(&session, &sql, query_uuid.unwrap_or(ZERO_UUID), inline_rows)
                     .await
             }
-            (QuackMessage::FetchRequest {
-                result_uuid,
-                batch_index,
-                ack_index,
-                ..
-            }, Some(session)) => {
+            (
+                QuackMessage::FetchRequest {
+                    result_uuid,
+                    batch_index,
+                    ack_index,
+                    ..
+                },
+                Some(session),
+            ) => {
                 self.fetch(
                     &session,
                     result_uuid,
@@ -105,7 +111,10 @@ impl Dispatcher {
             (QuackMessage::CancelRequest { query_uuid, .. }, Some(session)) => {
                 self.cancel(&session, query_uuid).await
             }
-            (QuackMessage::HeartbeatRequest { .. } | QuackMessage::Acknowledgement { .. }, Some(_)) => {
+            (
+                QuackMessage::HeartbeatRequest { .. } | QuackMessage::Acknowledgement { .. },
+                Some(_),
+            ) => {
                 // no result is retained for a replay, so an acknowledgement has nothing to drop
                 success()
             }
@@ -137,7 +146,8 @@ impl Dispatcher {
         else {
             return Err(ClientError::invalid_input("expected CONNECTION_REQUEST"));
         };
-        if min_supported_quack_version > QUACK_VERSION || max_supported_quack_version < QUACK_VERSION
+        if min_supported_quack_version > QUACK_VERSION
+            || max_supported_quack_version < QUACK_VERSION
         {
             return Err(ClientError::invalid_input(format!(
                 "Unsupported Quack version - server only supports version {QUACK_VERSION} of quack"
@@ -172,14 +182,16 @@ impl Dispatcher {
         )))?;
         tracing::debug!(%connection_id, "session opened");
 
-        Ok(Bytes::from(encode_response(&QuackMessage::ConnectionResponse {
-            header: MessageHeader::new(MessageType::ConnectionResponse)
-                .with_connection(connection_id),
-            server_duckdb_version: Some(SERVER_VERSION.to_string()),
-            server_platform: Some(platform()),
-            quack_version: Some(QUACK_VERSION),
-            heartbeat_timeout_seconds: Some(heartbeat_seconds),
-        })?))
+        Ok(Bytes::from(encode_response(
+            &QuackMessage::ConnectionResponse {
+                header: MessageHeader::new(MessageType::ConnectionResponse)
+                    .with_connection(connection_id),
+                server_duckdb_version: Some(SERVER_VERSION.to_string()),
+                server_platform: Some(platform()),
+                quack_version: Some(QUACK_VERSION),
+                heartbeat_timeout_seconds: Some(heartbeat_seconds),
+            },
+        )?))
     }
 
     async fn prepare(
@@ -348,10 +360,16 @@ fn parse(
     session: &Session,
     sql: &str,
 ) -> Result<std::collections::VecDeque<Statement>, ClientError> {
-    let dialect_name = session.ctx.state().config().options().sql_parser.dialect.to_string();
-    let dialect: Box<dyn Dialect> = dialect_from_str(&dialect_name).ok_or_else(|| {
-        ClientError::invalid_input(format!("unknown SQL dialect {dialect_name}"))
-    })?;
+    let dialect_name = session
+        .ctx
+        .state()
+        .config()
+        .options()
+        .sql_parser
+        .dialect
+        .to_string();
+    let dialect: Box<dyn Dialect> = dialect_from_str(&dialect_name)
+        .ok_or_else(|| ClientError::invalid_input(format!("unknown SQL dialect {dialect_name}")))?;
     DFParserBuilder::new(sql)
         .with_dialect(dialect.as_ref())
         .build()
@@ -390,9 +408,11 @@ fn result_columns(
 }
 
 fn success() -> Result<Bytes, ClientError> {
-    Ok(Bytes::from(encode_response(&QuackMessage::SuccessResponse {
-        header: MessageHeader::new(MessageType::SuccessResponse),
-    })?))
+    Ok(Bytes::from(encode_response(
+        &QuackMessage::SuccessResponse {
+            header: MessageHeader::new(MessageType::SuccessResponse),
+        },
+    )?))
 }
 
 /// Encodes `error` as an ERROR_RESPONSE.

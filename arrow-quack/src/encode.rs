@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, FixedSizeListArray, GenericListArray,
-    OffsetSizeTrait, PrimitiveArray, StructArray,
+    Array, ArrayRef, AsArray, BooleanArray, FixedSizeListArray, GenericListArray, OffsetSizeTrait,
+    PrimitiveArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
@@ -24,8 +24,8 @@ use arrow::datatypes::{
     Decimal128Type, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
     Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
@@ -114,13 +114,22 @@ fn normalize(array: &ArrayRef) -> Result<ArrayRef> {
         DataType::Dictionary(_, value) => cast(array, value)?,
         DataType::Struct(_) => {
             let array = array.as_struct();
-            let columns = array.columns().iter().map(normalize).collect::<Result<Vec<_>>>()?;
+            let columns = array
+                .columns()
+                .iter()
+                .map(normalize)
+                .collect::<Result<Vec<_>>>()?;
             let fields = array
                 .fields()
                 .iter()
                 .zip(&columns)
                 .map(|(field, column)| {
-                    Arc::new(field.as_ref().clone().with_data_type(column.data_type().clone()))
+                    Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(column.data_type().clone()),
+                    )
                 })
                 .collect::<Vec<_>>();
             Arc::new(StructArray::try_new(
@@ -203,14 +212,16 @@ fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()>
     let valid = |index: usize| nulls.as_ref().is_none_or(|nulls| nulls.is_valid(index));
 
     match array.data_type() {
-        DataType::Null => write_fixed(writer, count, 4, |_, _| Ok(()))?,
+        DataType::Null => write_fixed(writer, count, &i32::null_bytes(), |_, _| Ok(()))?,
         DataType::Boolean => {
+            // BOOLEAN is stored as int8, so a NULL is 0x80
             let values: &BooleanArray = array.as_boolean();
-            let mut data = Vec::with_capacity(count);
-            for index in 0..count {
-                data.push(u8::from(valid(index) && values.value(index)));
-            }
-            writer.write_field(102, |writer| writer.write_blob(&data))?;
+            write_fixed(writer, count, &i8::null_bytes(), |data, index| {
+                if valid(index) {
+                    data.push(u8::from(values.value(index)));
+                }
+                Ok(())
+            })?
         }
         DataType::Int8 => write_primitive::<Int8Type, _>(writer, array, &valid, |v| v)?,
         DataType::Int16 => write_primitive::<Int16Type, _>(writer, array, &valid, |v| v)?,
@@ -311,7 +322,7 @@ fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()>
                 TimeUnit::Microsecond => durations::<DurationMicrosecondType>(array),
                 TimeUnit::Nanosecond => durations::<DurationNanosecondType>(array),
             };
-            write_fixed(writer, count, 16, |data, index| {
+            write_fixed(writer, count, &interval_null(), |data, index| {
                 if valid(index) {
                     // as DuckDB's Interval::FromMicro: whole days, then the rest
                     let micros = micros(values[index]);
@@ -362,61 +373,90 @@ fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()>
 fn logical_nulls(array: &dyn Array) -> Option<NullBuffer> {
     match array.data_type() {
         DataType::Null => Some(NullBuffer::new_null(array.len())),
-        _ => array.nulls().filter(|nulls| nulls.null_count() > 0).cloned(),
+        _ => array
+            .nulls()
+            .filter(|nulls| nulls.null_count() > 0)
+            .cloned(),
     }
 }
 
-fn write_validity(writer: &mut BinaryWriter, nulls: Option<&NullBuffer>, count: usize) -> Result<()> {
+fn write_validity(
+    writer: &mut BinaryWriter,
+    nulls: Option<&NullBuffer>,
+    count: usize,
+) -> Result<()> {
     let Some(nulls) = nulls else {
         writer.write_field(100, |writer| writer.write_bool(false))?;
         return Ok(());
     };
     writer.write_field(100, |writer| writer.write_bool(true))?;
-    let mut mask = vec![0u8; validity_mask_size(count)];
+    // as DuckDB's ValidityMask: all valid, padding included, then the NULLs cleared
+    let mut mask = vec![0xffu8; validity_mask_size(count)];
     for (index, valid) in nulls.iter().enumerate() {
-        if valid {
-            mask[index / 8] |= 1 << (index % 8);
+        if !valid {
+            mask[index / 8] &= !(1 << (index % 8));
         }
     }
     writer.write_field(101, |writer| writer.write_blob(&mask))?;
     Ok(())
 }
 
-/// Writes field 102 with `count` values of `width` bytes; `write` appends one value.
+/// Writes field 102 with `count` fixed-width values; `write` appends one value. A row
+/// `write` skips (a NULL) gets `null`, the value DuckDB stores in a NULL slot
+/// (`NullValue<T>()`): the minimum of a signed type, 0 of an unsigned one, NaN.
 fn write_fixed(
     writer: &mut BinaryWriter,
     count: usize,
-    width: usize,
+    null: &[u8],
     mut write: impl FnMut(&mut Vec<u8>, usize) -> Result<()>,
 ) -> Result<()> {
-    let mut data = Vec::with_capacity(count * width);
+    let mut data = Vec::with_capacity(count * null.len());
     for index in 0..count {
         let before = data.len();
         write(&mut data, index)?;
-        // a value the closure skipped (a NULL) is zeros
-        data.resize(before + width, 0);
+        if data.len() == before {
+            data.extend_from_slice(null);
+        }
     }
     writer.write_field(102, |writer| writer.write_blob(&data))?;
     Ok(())
 }
 
-/// A little-endian fixed-width value.
+/// A little-endian fixed-width value, and DuckDB's NULL slot for its type.
 trait Fixed: Copy {
-    const WIDTH: usize;
+    const NULL: Self;
     fn put(self, data: &mut Vec<u8>);
+    fn null_bytes() -> Vec<u8> {
+        let mut data = Vec::new();
+        Self::NULL.put(&mut data);
+        data
+    }
 }
 
 macro_rules! fixed {
-    ($($t:ty),*) => {$(
+    ($($t:ty => $null:expr),*) => {$(
         impl Fixed for $t {
-            const WIDTH: usize = size_of::<$t>();
+            const NULL: Self = $null;
             fn put(self, data: &mut Vec<u8>) {
                 data.extend_from_slice(&self.to_le_bytes());
             }
         }
     )*};
 }
-fixed!(i8, i16, i32, i64, i128, u8, u16, u32, u64, f32, f64);
+fixed!(
+    i8 => i8::MIN, i16 => i16::MIN, i32 => i32::MIN, i64 => i64::MIN,
+    // hugeint_t's NullValue: lower 0, upper i64::MIN
+    i128 => i128::MIN,
+    u8 => 0, u16 => 0, u32 => 0, u64 => 0,
+    f32 => f32::NAN, f64 => f64::NAN
+);
+
+/// An INTERVAL NULL slot: every field at its minimum.
+fn interval_null() -> Vec<u8> {
+    let mut data = Vec::with_capacity(16);
+    write_interval_value(&mut data, i32::MIN, i32::MIN, i64::MIN);
+    data
+}
 
 fn write_primitive<T: ArrowPrimitiveType, F: Fixed>(
     writer: &mut BinaryWriter,
@@ -425,7 +465,7 @@ fn write_primitive<T: ArrowPrimitiveType, F: Fixed>(
     convert: impl Fn(T::Native) -> F,
 ) -> Result<()> {
     let values: &PrimitiveArray<T> = array.as_primitive();
-    write_fixed(writer, values.len(), F::WIDTH, |data, index| {
+    write_fixed(writer, values.len(), &F::null_bytes(), |data, index| {
         if valid(index) {
             convert(values.value(index)).put(data);
         }
@@ -448,7 +488,13 @@ fn write_decimal<T: ArrowPrimitiveType>(
         10..=18 => 8,
         _ => 16,
     };
-    write_fixed(writer, values.len(), width, |data, index| {
+    let null = match width {
+        2 => i16::null_bytes(),
+        4 => i32::null_bytes(),
+        8 => i64::null_bytes(),
+        _ => i128::null_bytes(),
+    };
+    write_fixed(writer, values.len(), &null, |data, index| {
         if !valid(index) {
             return Ok(());
         }
@@ -480,9 +526,8 @@ fn write_strings<'a>(
     for index in 0..count {
         if valid(index) {
             let value = value(index);
-            let length = u32::try_from(value.len()).map_err(|_| {
-                Error::unsupported(&DataType::Utf8, "a value is longer than 4 GiB")
-            })?;
+            let length = u32::try_from(value.len())
+                .map_err(|_| Error::unsupported(&DataType::Utf8, "a value is longer than 4 GiB"))?;
             lengths.extend_from_slice(&length.to_le_bytes());
             bytes.extend_from_slice(value);
         } else {
@@ -509,7 +554,7 @@ fn write_interval(
     match unit {
         IntervalUnit::YearMonth => {
             let values = array.as_primitive::<IntervalYearMonthType>();
-            write_fixed(writer, count, 16, |data, index| {
+            write_fixed(writer, count, &interval_null(), |data, index| {
                 if valid(index) {
                     write_interval_value(data, values.value(index), 0, 0);
                 }
@@ -518,7 +563,7 @@ fn write_interval(
         }
         IntervalUnit::DayTime => {
             let values = array.as_primitive::<IntervalDayTimeType>();
-            write_fixed(writer, count, 16, |data, index| {
+            write_fixed(writer, count, &interval_null(), |data, index| {
                 if valid(index) {
                     let value = values.value(index);
                     write_interval_value(
@@ -533,15 +578,10 @@ fn write_interval(
         }
         IntervalUnit::MonthDayNano => {
             let values = array.as_primitive::<IntervalMonthDayNanoType>();
-            write_fixed(writer, count, 16, |data, index| {
+            write_fixed(writer, count, &interval_null(), |data, index| {
                 if valid(index) {
                     let value = values.value(index);
-                    write_interval_value(
-                        data,
-                        value.months,
-                        value.days,
-                        value.nanoseconds / 1_000,
-                    );
+                    write_interval_value(data, value.months, value.days, value.nanoseconds / 1_000);
                 }
                 Ok(())
             })
@@ -563,7 +603,9 @@ fn write_list_entries(
 ) -> Result<()> {
     let offsets: Vec<usize> = offsets.collect();
     let base = offsets[0];
-    writer.write_field(104, |writer| writer.write_uleb((offsets[count] - base) as u64))?;
+    writer.write_field(104, |writer| {
+        writer.write_uleb((offsets[count] - base) as u64)
+    })?;
     writer.write_field(105, |writer| {
         writer.write_uleb(count as u64)?;
         for index in 0..count {

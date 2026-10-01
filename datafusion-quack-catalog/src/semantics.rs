@@ -35,8 +35,8 @@ use datafusion::logical_expr::planner::{
     ExprPlanner, PlannerResult, RawAggregateExpr, RawBinaryExpr,
 };
 use datafusion::logical_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, Expr, ExprSchemable, GroupsAccumulator,
-    Operator, ReversedUDAF, Signature, Volatility, binary_expr, cast,
+    Accumulator, AggregateUDF, AggregateUDFImpl, Expr, ExprSchemable, GroupsAccumulator, Operator,
+    ReversedUDAF, Signature, Volatility, binary_expr, cast,
 };
 use datafusion::sql::sqlparser::ast::BinaryOperator;
 
@@ -51,7 +51,9 @@ pub fn duckdb_client_semantics(state: SessionState) -> Result<SessionState> {
 
 /// `sum` whose integer arguments are summed as `DECIMAL(38,0)`, so the sum can't wrap.
 pub fn wide_sum_udaf(sum: Arc<AggregateUDF>) -> AggregateUDF {
-    coerced(sum, |t| t.is_integer().then_some(DataType::Decimal128(38, 0)))
+    coerced(sum, |t| {
+        t.is_integer().then_some(DataType::Decimal128(38, 0))
+    })
 }
 
 fn coerced(inner: Arc<AggregateUDF>, coerce: fn(&DataType) -> Option<DataType>) -> AggregateUDF {
@@ -130,13 +132,11 @@ impl ExprPlanner for DuckDbExprPlanner {
         };
         let interval = |t: &DataType| matches!(t, DataType::Interval(_));
         let planned = match (op, &left, &right) {
-            (Operator::Divide, l, r) if is_exact_number(l) && is_exact_number(r) => {
-                binary_expr(
-                    cast(expr.left.clone(), DataType::Float64),
-                    op,
-                    cast(expr.right.clone(), DataType::Float64),
-                )
-            }
+            (Operator::Divide, l, r) if is_exact_number(l) && is_exact_number(r) => binary_expr(
+                cast(expr.left.clone(), DataType::Float64),
+                op,
+                cast(expr.right.clone(), DataType::Float64),
+            ),
             (Operator::Plus | Operator::Minus, DataType::Date32, r) if interval(r) => {
                 binary_expr(cast(expr.left.clone(), TIMESTAMP), op, expr.right.clone())
             }
@@ -164,7 +164,10 @@ impl ExprPlanner for DuckDbExprPlanner {
         Ok(PlannerResult::Planned(planned))
     }
 
-    fn plan_aggregate(&self, mut expr: RawAggregateExpr) -> Result<PlannerResult<RawAggregateExpr>> {
+    fn plan_aggregate(
+        &self,
+        mut expr: RawAggregateExpr,
+    ) -> Result<PlannerResult<RawAggregateExpr>> {
         if let (Some(avg), "avg") = (&self.avg, expr.func.name()) {
             expr.func = Arc::clone(avg);
         }
@@ -290,9 +293,16 @@ mod tests {
     #[tokio::test]
     async fn results_have_duckdb_types() {
         let ctx = duckdb_ctx().await;
-        assert_eq!(typed(&ctx, "SELECT 5 / 2").await, ("Float64".into(), "2.5".into()));
         assert_eq!(
-            typed(&ctx, "SELECT CAST(1.5 AS DECIMAL(10,2)) / CAST(2 AS DECIMAL(10,2))").await,
+            typed(&ctx, "SELECT 5 / 2").await,
+            ("Float64".into(), "2.5".into())
+        );
+        assert_eq!(
+            typed(
+                &ctx,
+                "SELECT CAST(1.5 AS DECIMAL(10,2)) / CAST(2 AS DECIMAL(10,2))"
+            )
+            .await,
             ("Float64".into(), "0.75".into())
         );
         assert_eq!(typed(&ctx, "SELECT 7 // 2").await.1, "3");
@@ -301,7 +311,11 @@ mod tests {
             ("Float64".into(), "1.75".into())
         );
         assert_eq!(
-            typed(&ctx, "SELECT sum(x) FROM (VALUES (9223372036854775807), (9223372036854775807)) t(x)").await,
+            typed(
+                &ctx,
+                "SELECT sum(x) FROM (VALUES (9223372036854775807), (9223372036854775807)) t(x)"
+            )
+            .await,
             ("Decimal128(38, 0)".into(), "18446744073709551614".into())
         );
         assert_eq!(
@@ -318,6 +332,11 @@ mod tests {
         );
         // other aggregates and operators are untouched
         assert_eq!(typed(&ctx, "SELECT 5 * 2").await.0, "Int64");
-        assert_eq!(typed(&ctx, "SELECT avg(x) FROM (VALUES (1), (2)) t(x)").await.1, "1.5");
+        assert_eq!(
+            typed(&ctx, "SELECT avg(x) FROM (VALUES (1), (2)) t(x)")
+                .await
+                .1,
+            "1.5"
+        );
     }
 }

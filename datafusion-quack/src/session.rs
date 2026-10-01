@@ -281,7 +281,10 @@ mod tests {
     fn connection_ids_are_128_random_bits() {
         let a = new_connection_id();
         assert_eq!(a.len(), 32);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase())
+        );
         assert_ne!(a, new_connection_id());
     }
 

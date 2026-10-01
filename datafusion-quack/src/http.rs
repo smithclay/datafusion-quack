@@ -29,7 +29,10 @@ const CONTENT_TYPE_DUCKDB: &str = "application/vnd.duckdb";
 pub(crate) fn router(dispatcher: Arc<Dispatcher>) -> Router {
     Router::new()
         .route("/", get(|| async { BANNER }))
-        .route("/quack", axum::routing::post(post_quack).options(options_quack))
+        .route(
+            "/quack",
+            axum::routing::post(post_quack).options(options_quack),
+        )
         .with_state(dispatcher)
 }
 
@@ -136,10 +139,7 @@ async fn serve_tls(
     }
 }
 
-fn tls_acceptor(
-    cert: &std::path::Path,
-    key: &std::path::Path,
-) -> Result<TlsAcceptor, ServerError> {
+fn tls_acceptor(cert: &std::path::Path, key: &std::path::Path) -> Result<TlsAcceptor, ServerError> {
     let tls_error = |what: &str, path: &std::path::Path, error: &dyn std::fmt::Display| {
         ServerError::Tls(format!("{what} {}: {error}", path.display()))
     };
@@ -157,13 +157,14 @@ fn tls_acceptor(
     .map_err(|e| tls_error("cannot read", key, &e))?
     .ok_or_else(|| tls_error("no private key in", key, &"empty"))?;
 
-    let mut config =
-        rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .with_safe_default_protocol_versions()
-            .map_err(|e| ServerError::Tls(e.to_string()))?
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|e| ServerError::Tls(e.to_string()))?;
+    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| ServerError::Tls(e.to_string()))?
+    .with_no_client_auth()
+    .with_single_cert(certs, key)
+    .map_err(|e| ServerError::Tls(e.to_string()))?;
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(TlsAcceptor::from(Arc::new(config)))
 }

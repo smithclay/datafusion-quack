@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::catalog::{CatalogProviderList, TableFunctionArgs, TableFunctionImpl, TableProvider};
+use datafusion::catalog::{
+    CatalogProviderList, TableFunctionArgs, TableFunctionImpl, TableProvider,
+};
 use datafusion::common::{ScalarValue, plan_err};
 use datafusion::datasource::TableType;
 use datafusion::error::{DataFusionError, Result};
@@ -186,12 +188,16 @@ impl TableFunctionImpl for DuckDbCatalogFunction {
         let oids = Arc::clone(&self.oids);
         let schema = function.schema();
         let batch_schema = Arc::clone(&schema);
-        Ok(Arc::new(ComputedTable::new(function.name(), schema, move || {
-            let list = Arc::clone(&list);
-            let oids = Arc::clone(&oids);
-            let schema = Arc::clone(&batch_schema);
-            Box::pin(async move { compute(function, list.as_ref(), &oids, schema).await })
-        })))
+        Ok(Arc::new(ComputedTable::new(
+            function.name(),
+            schema,
+            move || {
+                let list = Arc::clone(&list);
+                let oids = Arc::clone(&oids);
+                let schema = Arc::clone(&batch_schema);
+                Box::pin(async move { compute(function, list.as_ref(), &oids, schema).await })
+            },
+        )))
     }
 }
 
@@ -331,8 +337,7 @@ async fn compute(
                     );
                     continue;
                 }
-                let Some(sql) = create_table_sql(&table.schema, &table.name, &table_schema)
-                else {
+                let Some(sql) = create_table_sql(&table.schema, &table.name, &table_schema) else {
                     tracing::warn!(
                         catalog = %table.catalog,
                         schema = %table.schema,

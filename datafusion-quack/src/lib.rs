@@ -61,7 +61,10 @@ use session::SessionStore;
 
 /// Serves `ctx` until the process stops.
 pub async fn serve(ctx: Arc<SessionContext>, options: &ServerOptions) -> Result<(), ServerError> {
-    QuackServer::new(ctx).with_options(options.clone()).serve().await
+    QuackServer::new(ctx)
+        .with_options(options.clone())
+        .serve()
+        .await
 }
 
 /// Serves `ctx`, answering statements with `hooks` before DataFusion.
@@ -177,7 +180,8 @@ impl QuackServer {
 
     /// Serves on `listener` until the process stops.
     pub async fn serve_with_listener(self, listener: TcpListener) -> Result<(), ServerError> {
-        self.serve_with_shutdown(listener, std::future::pending()).await
+        self.serve_with_shutdown(listener, std::future::pending())
+            .await
     }
 
     /// Serves on `listener` until `shutdown` resolves.

@@ -19,11 +19,9 @@ pub(crate) fn numeric_precision(data_type: &DataType) -> (Option<u64>, Option<u6
         DataType::Int64 | DataType::UInt64 => binary(64),
         DataType::Float16 | DataType::Float32 => (Some(24), Some(2), None),
         DataType::Float64 => (Some(53), Some(2), None),
-        DataType::Decimal32(p, s) | DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => (
-            Some(u64::from(*p)),
-            Some(10),
-            u64::try_from(*s).ok(),
-        ),
+        DataType::Decimal32(p, s) | DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
+            (Some(u64::from(*p)), Some(10), u64::try_from(*s).ok())
+        }
         DataType::Dictionary(_, value) => numeric_precision(value),
         _ => (None, None, None),
     }
@@ -35,14 +33,21 @@ pub(crate) fn numeric_precision(data_type: &DataType) -> (Option<u64>, Option<u6
 ///
 /// `None` when a column has a type DuckDB has no name for: a client couldn't parse
 /// the statement.
-pub(crate) fn create_table_sql(schema_name: &str, table_name: &str, schema: &Schema) -> Option<String> {
+pub(crate) fn create_table_sql(
+    schema_name: &str,
+    table_name: &str,
+    schema: &Schema,
+) -> Option<String> {
     let columns = schema
         .fields()
         .iter()
         .map(|field| {
             let type_name = duckdb_type_name(field).ok()?;
             let not_null = if field.is_nullable() { "" } else { " NOT NULL" };
-            Some(format!("{} {type_name}{not_null}", quote_identifier(field.name())))
+            Some(format!(
+                "{} {type_name}{not_null}",
+                quote_identifier(field.name())
+            ))
         })
         .collect::<Option<Vec<_>>>()?;
     Some(format!(
@@ -57,7 +62,11 @@ pub(crate) fn qualified_name(schema_name: &str, name: &str) -> String {
     if schema_name == "main" {
         quote_identifier(name)
     } else {
-        format!("{}.{}", quote_identifier(schema_name), quote_identifier(name))
+        format!(
+            "{}.{}",
+            quote_identifier(schema_name),
+            quote_identifier(name)
+        )
     }
 }
 
@@ -79,8 +88,12 @@ mod tests {
             "CREATE TABLE t(id BIGINT NOT NULL, \"name\" VARCHAR, score DECIMAL(21,1));"
         );
         assert_eq!(
-            create_table_sql("s2", "U", &Schema::new(vec![Field::new("x", DataType::Int32, true)]))
-                .unwrap(),
+            create_table_sql(
+                "s2",
+                "U",
+                &Schema::new(vec![Field::new("x", DataType::Int32, true)])
+            )
+            .unwrap(),
             "CREATE TABLE s2.\"U\"(x INTEGER);"
         );
         let unsupported = Schema::new(vec![Field::new("d", DataType::Decimal256(50, 0), true)]);

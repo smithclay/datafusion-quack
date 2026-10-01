@@ -38,7 +38,9 @@ async fn values(client: &QuackClient, sql: &str) -> Vec<Vec<Value>> {
 async fn selects_a_million_rows_across_many_batches() {
     let server = TestServer::start(
         SessionContext::new(),
-        options().with_batch_target_bytes(64 * 1024).with_inline_rows(5000),
+        options()
+            .with_batch_target_bytes(64 * 1024)
+            .with_inline_rows(5000),
     )
     .await;
     let client = connect(&server).await;
@@ -84,7 +86,10 @@ async fn a_bad_token_is_rejected() {
         .await
         .err()
         .expect("refused");
-    assert!(error.to_string().contains("Authentication failed"), "{error}");
+    assert!(
+        error.to_string().contains("Authentication failed"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -100,7 +105,10 @@ async fn heartbeats_keep_a_session_alive_past_its_timeout() {
     .await
     .unwrap();
     tokio::time::sleep(Duration::from_millis(3500)).await;
-    assert_eq!(values(&client, "SELECT 'still here'").await, [[Value::String("still here".into())]]);
+    assert_eq!(
+        values(&client, "SELECT 'still here'").await,
+        [[Value::String("still here".into())]]
+    );
 }
 
 #[tokio::test]
@@ -126,7 +134,10 @@ async fn ddl_dml_and_transactions() {
     );
     // another session sees the table
     let other = connect(&server).await;
-    assert_eq!(values(&other, "SELECT count(*) FROM t").await, [[Value::Int(2)]]);
+    assert_eq!(
+        values(&other, "SELECT count(*) FROM t").await,
+        [[Value::Int(2)]]
+    );
 }
 
 #[tokio::test]
@@ -146,8 +157,14 @@ async fn sessions_run_queries_concurrently() {
     for i in 0..8i64 {
         let uri = server.uri.clone();
         tasks.push(tokio::spawn(async move {
-            let client = QuackClient::connect(&uri, client_options(TOKEN)).await.unwrap();
-            let rows = values(&client, &format!("SELECT CAST(sum(value) AS BIGINT) + {i} FROM range(100000)")).await;
+            let client = QuackClient::connect(&uri, client_options(TOKEN))
+                .await
+                .unwrap();
+            let rows = values(
+                &client,
+                &format!("SELECT CAST(sum(value) AS BIGINT) + {i} FROM range(100000)"),
+            )
+            .await;
             assert_eq!(rows, [[Value::Int(4_999_950_000 + i)]]);
         }));
     }
@@ -169,7 +186,9 @@ async fn shutdown_stops_the_server() {
             }),
     );
     let uri = format!("quack:{address}");
-    QuackClient::connect(&uri, client_options(TOKEN)).await.unwrap();
+    QuackClient::connect(&uri, client_options(TOKEN))
+        .await
+        .unwrap();
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }

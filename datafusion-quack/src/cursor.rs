@@ -180,7 +180,11 @@ impl Cursor {
 
     /// Answers a FETCH for client batch `batch_index`, acknowledging everything up to
     /// `ack_index`.
-    pub(crate) async fn fetch(&self, batch_index: u64, ack_index: u64) -> Result<Bytes, ClientError> {
+    pub(crate) async fn fetch(
+        &self,
+        batch_index: u64,
+        ack_index: u64,
+    ) -> Result<Bytes, ClientError> {
         if batch_index == 0 {
             return Err(ClientError::invalid_input(
                 "FETCH_REQUEST is missing its batch index",
@@ -325,9 +329,15 @@ mod tests {
             let (chunks, total, batch) = decoded(&cursor.fetch(index, index - 1).await.unwrap());
             assert_eq!((chunks, total, batch), (1, None, Some(index)));
         }
-        assert_eq!(decoded(&cursor.fetch(4, 3).await.unwrap()), (0, Some(3), None));
+        assert_eq!(
+            decoded(&cursor.fetch(4, 3).await.unwrap()),
+            (0, Some(3), None)
+        );
         // and again, past the end
-        assert_eq!(decoded(&cursor.fetch(9, 3).await.unwrap()), (0, Some(3), None));
+        assert_eq!(
+            decoded(&cursor.fetch(9, 3).await.unwrap()),
+            (0, Some(3), None)
+        );
     }
 
     #[tokio::test]
@@ -359,7 +369,10 @@ mod tests {
         let cursor = Cursor::new(Some(producer), 2, 4, cancel);
         assert_eq!(decoded(&cursor.fetch(1, 0).await.unwrap()).2, Some(1));
         assert_eq!(decoded(&cursor.fetch(2, 1).await.unwrap()).2, Some(2));
-        assert_eq!(decoded(&cursor.fetch(3, 2).await.unwrap()), (0, Some(2), None));
+        assert_eq!(
+            decoded(&cursor.fetch(3, 2).await.unwrap()),
+            (0, Some(2), None)
+        );
     }
 
     #[tokio::test]

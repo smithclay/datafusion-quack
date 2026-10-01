@@ -15,7 +15,10 @@ use datafusion::error::Result;
 use crate::information_schema::{DuckDbInformationSchema, INFORMATION_SCHEMA};
 
 /// Finds `name` in `names`: exactly, or else case-insensitively if only one matches.
-pub(crate) fn resolve<'a>(name: &str, names: impl IntoIterator<Item = &'a String>) -> Option<String> {
+pub(crate) fn resolve<'a>(
+    name: &str,
+    names: impl IntoIterator<Item = &'a String>,
+) -> Option<String> {
     let mut folded = None;
     for candidate in names {
         if candidate == name {
@@ -97,7 +100,9 @@ impl CatalogProvider for DuckDbCatalog {
             return Some(Arc::new(DuckDbSchema { inner }));
         }
         if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            return Some(Arc::new(DuckDbInformationSchema::new(Arc::clone(&self.list))));
+            return Some(Arc::new(DuckDbInformationSchema::new(Arc::clone(
+                &self.list,
+            ))));
         }
         None
     }
