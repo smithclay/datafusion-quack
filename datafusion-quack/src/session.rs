@@ -74,9 +74,11 @@ impl SessionContextProvider for SharedSessionContextProvider {
             ResultSemantics::DuckDb => duckdb,
             ResultSemantics::DataFusion => plain,
         };
-        let state = SessionStateBuilder::new_from_existing(state.clone())
+        let mut state = SessionStateBuilder::new_from_existing(state.clone())
             .with_session_id(session.connection_id.clone())
             .build();
+        // object ids that live, and are freed, with the session
+        datafusion_quack_catalog::register_catalog_functions(&mut state);
         Ok(SessionContext::new_with_state(state))
     }
 }
@@ -462,5 +464,52 @@ mod tests {
         assert!(error.message.contains("Interrupted"), "{error}");
         // nothing runs: a cancel succeeds and changes nothing
         session.cancel(uuid(3)).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    async fn table_oid(ctx: &SessionContext, table: &str) -> String {
+        let sql = format!("SELECT table_oid FROM duckdb_tables() WHERE table_name = '{table}'");
+        let batches = ctx.sql(&sql).await.unwrap().collect().await.unwrap();
+        arrow::util::display::array_value_to_string(batches[0].column(0), 0).unwrap()
+    }
+
+    fn info(id: &str) -> SessionInfo {
+        SessionInfo {
+            connection_id: id.into(),
+            client_version: String::new(),
+            client_platform: String::new(),
+            result_semantics: ResultSemantics::DataFusion,
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_oids_belong_to_the_session() {
+        let base = Arc::new(SessionContext::new());
+        let provider = SharedSessionContextProvider::new(Arc::clone(&base));
+        for t in ["t1", "t2", "t3"] {
+            base.sql(&format!("CREATE TABLE {t} (i INT)"))
+                .await
+                .unwrap();
+        }
+        // a session sees three tables, which then go away
+        let first = provider.session_context(&info("a")).await.unwrap();
+        table_oid(&first, "t1").await;
+        for t in ["t1", "t2", "t3"] {
+            base.sql(&format!("DROP TABLE {t}")).await.unwrap();
+        }
+        drop(first);
+        base.sql("CREATE TABLE z (i INT)").await.unwrap();
+
+        // a later session numbers what it sees as a fresh server would
+        let later = provider.session_context(&info("b")).await.unwrap();
+        let fresh = SharedSessionContextProvider::new(Arc::clone(&base))
+            .session_context(&info("c"))
+            .await
+            .unwrap();
+        assert_eq!(table_oid(&later, "z").await, table_oid(&fresh, "z").await);
     }
 }

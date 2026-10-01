@@ -72,18 +72,12 @@ pub fn duckdb_session_state(state: SessionState) -> Result<SessionState> {
     Ok(state)
 }
 
-/// Registers the DuckDB catalog functions (sharing one registry of oids),
+/// Registers the DuckDB catalog functions ([`register_catalog_functions`]),
 /// `current_database()`, `current_schema()`, `length`, `count_star()`, a `sum` of
 /// integers that returns `DECIMAL(38,0)` so it can't wrap, and the list functions
 /// DuckDB's catalog queries use if the session lacks them.
 pub fn register_duckdb_functions(state: &mut SessionState) -> Result<()> {
-    let oids = Arc::new(OidRegistry::default());
-    for function in CatalogFunction::ALL {
-        state.register_udtf(
-            function.name(),
-            Arc::new(DuckDbCatalogFunction::new(function, Arc::clone(&oids))),
-        );
-    }
+    register_catalog_functions(state);
     state.register_udf(Arc::new(current_database_udf()))?;
     state.register_udf(Arc::new(current_schema_udf()))?;
     state.register_udf(Arc::new(length_udf()))?;
@@ -107,4 +101,20 @@ pub fn register_duckdb_functions(state: &mut SessionState) -> Result<()> {
     ))?;
     // last, so the "system".main. aliases cover every function above
     duckdb_functions::register(state)
+}
+
+/// Registers `duckdb_databases()`, `duckdb_schemas()`, `duckdb_tables()`,
+/// `duckdb_views()` and `duckdb_columns()`, sharing a new registry of object ids.
+///
+/// The ids are stable while the registry lives, and it remembers every object it was
+/// asked about. Call this once per client session, on the session's own state, so the
+/// ids last as long as the session does.
+pub fn register_catalog_functions(state: &mut SessionState) {
+    let oids = Arc::new(OidRegistry::default());
+    for function in CatalogFunction::ALL {
+        state.register_udtf(
+            function.name(),
+            Arc::new(DuckDbCatalogFunction::new(function, Arc::clone(&oids))),
+        );
+    }
 }
