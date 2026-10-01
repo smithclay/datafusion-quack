@@ -40,6 +40,7 @@ use crate::{Error, Result};
 pub const STANDARD_VECTOR_SIZE: usize = 2048;
 
 const MILLIS_PER_DAY: i64 = 86_400_000;
+const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 /// One encoded DuckDB `DataChunk`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -311,12 +312,12 @@ fn write_vector_body(writer: &mut BinaryWriter, array: &dyn Array) -> Result<()>
                 TimeUnit::Nanosecond => durations::<DurationNanosecondType>(array),
             };
             write_fixed(writer, count, 16, |data, index| {
-                let micros = if valid(index) {
-                    micros(values[index])
-                } else {
-                    0
-                };
-                write_interval_value(data, 0, 0, micros);
+                if valid(index) {
+                    // as DuckDB's Interval::FromMicro: whole days, then the rest
+                    let micros = micros(values[index]);
+                    let days = i32::try_from(micros / MICROS_PER_DAY).unwrap_or(i32::MAX);
+                    write_interval_value(data, 0, days, micros % MICROS_PER_DAY);
+                }
                 Ok(())
             })?;
         }

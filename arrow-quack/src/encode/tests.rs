@@ -399,6 +399,7 @@ fn other_temporal_types_round_trip() {
         Arc::new(Time64NanosecondArray::from(vec![Some(5), Some(6), None])),
         Arc::new(IntervalYearMonthArray::from(vec![Some(14), Some(-1), None])),
         Arc::new(DurationMillisecondArray::from(vec![Some(1500), Some(-2), None])),
+        Arc::new(DurationSecondArray::from(vec![Some(139_200), Some(-90_000), None])),
     ]);
     let values = round_trip(&batch);
     assert_eq!(
@@ -434,6 +435,22 @@ fn other_temporal_types_round_trip() {
             days: 0,
             micros: 1_500_000
         })
+    );
+    // a duration of more than a day is whole days and the rest, as DuckDB's ts - ts
+    assert_eq!(
+        values[5][..2],
+        [
+            Value::Interval(IntervalValue {
+                months: 0,
+                days: 1,
+                micros: 52_800_000_000
+            }),
+            Value::Interval(IntervalValue {
+                months: 0,
+                days: -1,
+                micros: -3_600_000_000
+            })
+        ]
     );
 }
 

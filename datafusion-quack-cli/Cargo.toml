@@ -1,4 +1,28 @@
 [package]
 name = "datafusion-quack-cli"
+description = "Serve CSV, Parquet and JSON files to DuckDB clients over the Quack protocol"
+readme = "../README.md"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "datafusion-quack"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+datafusion = { workspace = true, default-features = true }
+datafusion-quack = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

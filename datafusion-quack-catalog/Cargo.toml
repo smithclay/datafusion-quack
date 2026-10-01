@@ -16,6 +16,7 @@ categories.workspace = true
 arrow = { workspace = true }
 arrow-quack = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 datafusion = { workspace = true, features = ["sql", "nested_expressions"] }
 tracing = { workspace = true }
 

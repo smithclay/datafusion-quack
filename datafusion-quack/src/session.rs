@@ -23,7 +23,11 @@ pub trait SessionContextProvider: Send + Sync + Debug {
 }
 
 /// Gives each session a context built from one base context, with DuckDB compatibility
-/// installed (see [`datafusion_quack_catalog::duckdb_session_state`]).
+/// installed (see [`datafusion_quack_catalog::duckdb_session_state`]). Sessions of
+/// DuckDB clients also get DuckDB's result types
+/// ([`datafusion_quack_catalog::duckdb_client_semantics`]): DuckDB pushes whole
+/// queries and expects DuckDB's answers. Other clients, such as the DataFusion Quack
+/// table provider, keep DataFusion's semantics.
 ///
 /// The sessions share the base context's catalogs, functions and runtime, so a table
 /// one client creates is visible to the others, as in DuckDB. Settings a session
@@ -50,8 +54,11 @@ impl SharedSessionContextProvider {
 
 #[async_trait]
 impl SessionContextProvider for SharedSessionContextProvider {
-    async fn session_context(&self, _session: &SessionInfo) -> DataFusionResult<SessionContext> {
-        let state = datafusion_quack_catalog::duckdb_session_state(self.base.state())?;
+    async fn session_context(&self, session: &SessionInfo) -> DataFusionResult<SessionContext> {
+        let mut state = datafusion_quack_catalog::duckdb_session_state(self.base.state())?;
+        if session.is_duckdb_client() {
+            state = datafusion_quack_catalog::duckdb_client_semantics(state)?;
+        }
         Ok(SessionContext::new_with_state(state))
     }
 }

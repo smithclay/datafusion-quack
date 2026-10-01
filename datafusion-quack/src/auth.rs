@@ -29,6 +29,14 @@ pub struct SessionInfo {
     pub client_platform: String,
 }
 
+impl SessionInfo {
+    /// Whether the client is DuckDB itself, which reports its version. Other clients,
+    /// such as the Rust `quack_protocol` client, leave it empty.
+    pub fn is_duckdb_client(&self) -> bool {
+        !self.client_version.is_empty()
+    }
+}
+
 /// Decides who may connect, and what they may run.
 #[async_trait]
 pub trait AuthProvider: Send + Sync + Debug {
