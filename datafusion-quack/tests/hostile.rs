@@ -329,3 +329,47 @@ proptest! {
         });
     }
 }
+
+#[tokio::test]
+async fn banner_and_cors_preflight() {
+    let server = TestServer::start(SessionContext::new(), options()).await;
+    let base = server.url.trim_end_matches("/quack").to_string();
+    let banner = reqwest::get(&base).await.unwrap();
+    assert_eq!(banner.status(), 200);
+    assert!(banner.text().await.unwrap().contains("DuckDB Quack RPC endpoint"));
+
+    let preflight = reqwest::Client::new()
+        .request(reqwest::Method::OPTIONS, &server.url)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(preflight.status(), 204);
+    assert_eq!(preflight.headers()["access-control-allow-origin"], "*");
+}
+
+#[tokio::test]
+async fn sessions_without_heartbeats_expire() {
+    let server = TestServer::start(SessionContext::new(), options()).await;
+    let connect = encode_response(&QuackMessage::ConnectionRequest {
+        header: MessageHeader::new(MessageType::ConnectionRequest),
+        auth_string: Some(TOKEN.into()),
+        client_duckdb_version: None,
+        client_platform: None,
+        min_supported_quack_version: 3,
+        max_supported_quack_version: 3,
+        client_id: None,
+        heartbeat_timeout_seconds: 1,
+    })
+    .unwrap();
+    let QuackMessage::ConnectionResponse { header, .. } = post(&server, connect).await else {
+        panic!("not connected");
+    };
+    let id = header.connection_id.unwrap();
+    // no heartbeat for longer than the lease: the session is gone
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    let message = error_message(post(&server, prepare(&id, "SELECT 1")).await);
+    assert!(
+        message == "Invalid connection id" || message == "Connection heartbeat lease expired",
+        "{message}"
+    );
+}
