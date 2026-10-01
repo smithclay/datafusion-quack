@@ -12,6 +12,10 @@
 //! Two locks: the buffers, held only to look up or file a batch, and the producer,
 //! held while the next batch is computed. A FETCH of a batch already produced never
 //! waits for the stream.
+//!
+//! Batches held for the client count against the session's DataFusion memory pool,
+//! from when they are produced until they are acknowledged. When the pool is full,
+//! the result fails with an `Out of Memory` error instead of growing.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,6 +25,7 @@ use std::time::Instant;
 use arrow_quack::{EncodedChunk, encode_record_batch};
 use bytes::Bytes;
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::memory_pool::MemoryReservation;
 use futures::StreamExt;
 use quack_protocol::server::{MessageHeader, MessageType, encode_fetch_response};
 use tokio::sync::watch;
@@ -61,6 +66,12 @@ impl CancelHandle {
 pub(crate) struct Batch {
     pub(crate) chunks: Vec<EncodedChunk>,
     pub(crate) rows: usize,
+}
+
+impl Batch {
+    fn bytes(&self) -> usize {
+        self.chunks.iter().map(|chunk| chunk.bytes.len()).sum()
+    }
 }
 
 /// Pulls record batches from a stream and encodes them into [`Batch`]es.
@@ -137,16 +148,20 @@ pub(crate) struct Cursor {
     buffers: Mutex<Buffers>,
     /// Held while the next batch is produced; `None` once the stream ended.
     producer: tokio::sync::Mutex<Option<BatchProducer>>,
+    /// The memory of the batches in `buffers`.
+    reservation: MemoryReservation,
 }
 
 impl Cursor {
     /// A cursor over what remains of `producer` after `prepare_batches` inline batches.
-    /// `producer` is `None` when the stream already ended.
+    /// `producer` is `None` when the stream already ended. The batches it holds are
+    /// accounted in `reservation`.
     pub(crate) fn new(
         producer: Option<BatchProducer>,
         prepare_batches: u64,
         max_inflight_batches: u64,
         cancel: CancelHandle,
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             prepare_batches,
@@ -162,6 +177,7 @@ impl Cursor {
                 end: producer.is_none().then_some(Ok(())),
             }),
             producer: tokio::sync::Mutex::new(producer),
+            reservation,
         }
     }
 
@@ -230,7 +246,15 @@ impl Cursor {
                 // the stream ended (answer reports it), so this can't be reached
                 return Err(ClientError::invalid_input("Result has been closed"));
             };
-            let next = running.next().await;
+            let next = running.next().await.and_then(|batch| match batch {
+                Some(batch) => {
+                    self.reservation.try_grow(batch.bytes()).map_err(|e| {
+                        ClientError::from(e).with_context("holding result batches for the client")
+                    })?;
+                    Ok(Some(batch))
+                }
+                None => Ok(None),
+            });
             let mut buffers = self.buffers();
             match next {
                 Ok(Some(batch)) => {
@@ -261,8 +285,15 @@ impl Cursor {
         }
         if request.dense_ack > buffers.acked {
             buffers.acked = request.dense_ack;
-            buffers.served = buffers.served.split_off(&(request.dense_ack + 1));
-            buffers.ready = buffers.ready.split_off(&(request.dense_ack + 1));
+            let first_kept = request.dense_ack + 1;
+            let served = buffers.served.split_off(&first_kept);
+            let ready = buffers.ready.split_off(&first_kept);
+            let served = std::mem::replace(&mut buffers.served, served);
+            let ready = std::mem::replace(&mut buffers.ready, ready);
+            self.reservation.shrink(
+                served.values().map(Bytes::len).sum::<usize>()
+                    + ready.values().map(Batch::bytes).sum::<usize>(),
+            );
         }
         if let Some(response) = buffers.served.get(&request.dense) {
             return Ok(Some(response.clone()));
@@ -274,6 +305,9 @@ impl Cursor {
                 None,
                 Some(request.batch_index),
             )?);
+            // the response replaces the batch: a header more
+            self.reservation.grow(response.len());
+            self.reservation.shrink(batch.bytes());
             buffers.served.insert(request.dense, response.clone());
             return Ok(Some(response));
         }
@@ -332,6 +366,9 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion::execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
     use quack_protocol::server::{QuackMessage, decode_request};
 
@@ -353,10 +390,15 @@ mod tests {
         BatchProducer::new(Box::pin(stream), cancel.clone(), 1)
     }
 
+    fn unbounded() -> MemoryReservation {
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        MemoryConsumer::new("test").register(&pool)
+    }
+
     fn cursor(batches: usize, inline: u64) -> Cursor {
         let cancel = CancelHandle::new();
         let producer = producer(batches, &cancel);
-        Cursor::new(Some(producer), inline, 4, cancel)
+        Cursor::new(Some(producer), inline, 4, cancel, unbounded())
     }
 
     fn decoded(bytes: &Bytes) -> (usize, Option<u64>, Option<u64>) {
@@ -415,7 +457,7 @@ mod tests {
         let mut producer = producer(4, &cancel);
         producer.next().await.unwrap();
         producer.next().await.unwrap();
-        let cursor = Cursor::new(Some(producer), 2, 4, cancel);
+        let cursor = Cursor::new(Some(producer), 2, 4, cancel, unbounded());
         assert_eq!(decoded(&cursor.fetch(1, 0).await.unwrap()).2, Some(1));
         assert_eq!(decoded(&cursor.fetch(2, 1).await.unwrap()).2, Some(2));
         assert_eq!(
@@ -442,7 +484,7 @@ mod tests {
         let stream = RecordBatchStreamAdapter::new(schema, futures::stream::pending());
         let cancel = CancelHandle::new();
         let producer = BatchProducer::new(Box::pin(stream), cancel.clone(), 1);
-        let cursor = Arc::new(Cursor::new(Some(producer), 0, 4, cancel));
+        let cursor = Arc::new(Cursor::new(Some(producer), 0, 4, cancel, unbounded()));
         let fetching = tokio::spawn({
             let cursor = Arc::clone(&cursor);
             async move { cursor.fetch(1, 0).await }
@@ -468,7 +510,7 @@ mod tests {
         let stream = RecordBatchStreamAdapter::new(schema, stream);
         let cancel = CancelHandle::new();
         let producer = BatchProducer::new(Box::pin(stream), cancel.clone(), 1);
-        let cursor = Arc::new(Cursor::new(Some(producer), 0, 4, cancel));
+        let cursor = Arc::new(Cursor::new(Some(producer), 0, 4, cancel, unbounded()));
         let first = cursor.fetch(1, 0).await.unwrap();
         let producing = tokio::spawn({
             let cursor = Arc::clone(&cursor);
@@ -480,6 +522,50 @@ mod tests {
             .expect("a retry doesn't wait for the next batch");
         assert_eq!(retried.unwrap(), first);
         producing.abort();
+    }
+
+    #[tokio::test]
+    async fn held_batches_count_against_the_memory_pool() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100_000));
+        let cancel = CancelHandle::new();
+        let cursor = Cursor::new(
+            Some(producer(5, &cancel)),
+            0,
+            4,
+            cancel,
+            MemoryConsumer::new("test").register(&pool),
+        );
+        cursor.fetch(3, 0).await.unwrap();
+        let held = pool.reserved();
+        assert!(held > 0);
+        cursor.fetch(4, 3).await.unwrap();
+        assert!(pool.reserved() < held, "acknowledged batches are released");
+        drop(cursor);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_full_memory_pool_fails_the_result() {
+        // room for one batch, not three
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(150));
+        let cancel = CancelHandle::new();
+        let cursor = Cursor::new(
+            Some(producer(5, &cancel)),
+            0,
+            4,
+            cancel,
+            MemoryConsumer::new("test").register(&pool),
+        );
+        let error = cursor.fetch(3, 0).await.unwrap_err();
+        assert_eq!(
+            error.exception_type,
+            crate::ExceptionType::OutOfMemory,
+            "{error}"
+        );
+        assert!(
+            cursor.fetch(1, 0).await.is_ok(),
+            "batches already held are served"
+        );
     }
 
     #[tokio::test]

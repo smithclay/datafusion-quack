@@ -6,6 +6,7 @@ use std::time::Duration;
 use arrow::datatypes::SchemaRef;
 use arrow_quack::{EncodedChunk, arrow_to_logical_type};
 use bytes::Bytes;
+use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::sqlparser::dialect::{Dialect, dialect_from_str};
 use std::panic::AssertUnwindSafe;
@@ -283,11 +284,17 @@ impl Dispatcher {
             }
         }
 
+        let reservation = MemoryConsumer::new(format!(
+            "quack result of session {}",
+            session.info.connection_id
+        ))
+        .register(&session.ctx.runtime_env().memory_pool);
         let cursor = Cursor::new(
             (!finished).then_some(producer),
             consumed,
             self.options.max_inflight_batches(),
             cancel.clone(),
+            reservation,
         );
         let response = encode_prepare_response(
             &MessageHeader::new(MessageType::PrepareResponse),

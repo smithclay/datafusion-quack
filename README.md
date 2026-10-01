@@ -73,6 +73,7 @@ datafusion-quack [OPTIONS]
   -d, --dir <DIR>          register every .csv/.parquet/.json/.ndjson file in DIR
   --seed provider-fixtures preload the fixture tables of the provider test suite
   --catalog / --schema     the default catalog and schema [memory / main]
+  --memory-limit <BYTES>   memory for queries and unread results, e.g. 4G [unlimited]
   --max-sessions, --heartbeat-max, --result-ttl, --inline-rows
 ```
 

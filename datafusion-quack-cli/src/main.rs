@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::{CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext};
 use datafusion_quack::{QuackServer, ServerOptions};
 use datafusion_quack_cli::seed;
@@ -92,6 +93,33 @@ struct Args {
     /// Rows a PREPARE response carries before the client must FETCH [default: 24576].
     #[arg(long)]
     inline_rows: Option<u64>,
+
+    /// The memory queries and unread results may use, shared by all sessions, e.g.
+    /// `4G` or `512M`. Past it, queries spill or fail with an Out of Memory error.
+    /// [default: unlimited]
+    #[arg(long, value_name = "BYTES", value_parser = bytes_arg)]
+    memory_limit: Option<usize>,
+}
+
+/// Parses a byte count with an optional K, M, G or T suffix (powers of 1024).
+fn bytes_arg(value: &str) -> std::result::Result<usize, String> {
+    let value = value.trim();
+    let digits = value.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let unit = value[digits.len()..].to_ascii_uppercase();
+    let shift = match unit.trim_end_matches("IB").trim_end_matches('B') {
+        "" => 0,
+        "K" => 10,
+        "M" => 20,
+        "G" => 30,
+        "T" => 40,
+        _ => return Err(format!("unknown unit in '{value}': use K, M, G or T")),
+    };
+    digits
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_mul(1usize << shift))
+        .ok_or_else(|| format!("expected a byte count such as 512M, got '{value}'"))
 }
 
 fn table_arg(value: &str) -> std::result::Result<(String, String), String> {
@@ -123,7 +151,11 @@ async fn main() -> std::process::ExitCode {
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let config = datafusion_quack::duckdb_session_config()
         .with_default_catalog_and_schema(&args.catalog, &args.schema);
-    let ctx = SessionContext::new_with_config(config);
+    let mut runtime = RuntimeEnvBuilder::new();
+    if let Some(limit) = args.memory_limit {
+        runtime = runtime.with_memory_limit(limit, 1.0);
+    }
+    let ctx = SessionContext::new_with_config_rt(config, runtime.build_arc()?);
     register_tables(&ctx, &args).await?;
 
     // the listener below is bound here, so host and port aren't options
@@ -228,4 +260,20 @@ async fn register_file(
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_counts_take_binary_suffixes() {
+        assert_eq!(bytes_arg("1024"), Ok(1024));
+        assert_eq!(bytes_arg("512M"), Ok(512 << 20));
+        assert_eq!(bytes_arg("4GiB"), Ok(4 << 30));
+        assert_eq!(bytes_arg("2kb"), Ok(2048));
+        assert!(bytes_arg("4X").is_err());
+        assert!(bytes_arg("").is_err());
+        assert!(bytes_arg("99999999999T").is_err());
+    }
 }

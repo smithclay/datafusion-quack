@@ -128,6 +128,9 @@ impl ServerOptions {
     /// How far ahead of its last acknowledged batch a client may FETCH. Results are held
     /// until acknowledged, so this bounds a session's result memory to about
     /// `max_inflight_batches × batch_target_bytes`. Default 64.
+    ///
+    /// Held batches also count against the session's DataFusion memory pool, so a
+    /// memory limit on the `SessionContext`'s runtime bounds them across all sessions.
     pub fn with_max_inflight_batches(mut self, max_inflight_batches: u64) -> Self {
         self.max_inflight_batches = max_inflight_batches.max(1);
         self
