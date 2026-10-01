@@ -49,6 +49,7 @@ mod hooks;
 mod http;
 mod options;
 mod session;
+mod telemetry;
 mod transaction;
 
 use std::future::Future;

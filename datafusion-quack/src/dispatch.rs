@@ -1,7 +1,7 @@
 //! Request dispatch: one decoded message in, one encoded response out.
 
 use std::sync::{Arc, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
 use arrow_quack::{EncodedChunk, arrow_to_logical_type};
@@ -24,6 +24,7 @@ use crate::error::ClientError;
 use crate::hooks::{QueryHook, QueryOutput};
 use crate::options::ServerOptions;
 use crate::session::{Session, SessionContextProvider, SessionStore, ZERO_UUID, new_connection_id};
+use crate::telemetry::{self, SessionEnd};
 use crate::transaction::Control;
 
 /// The version this server reports. DuckDB clients only log it.
@@ -52,25 +53,31 @@ impl Dispatcher {
     /// does a panic, so a bug answers one request with an error rather than dropping
     /// the connection.
     pub(crate) async fn handle(&self, body: &[u8]) -> Bytes {
-        match AssertUnwindSafe(self.dispatch(body)).catch_unwind().await {
+        let response = match AssertUnwindSafe(self.dispatch(body)).catch_unwind().await {
             Ok(Ok(response)) => response,
             Ok(Err(error)) => {
                 tracing::debug!(%error, "request failed");
+                telemetry::error(&error);
                 error_response(&error)
             }
             Err(_) => {
                 tracing::error!("panic while handling a request");
-                error_response(&ClientError::new(
+                let error = ClientError::new(
                     crate::error::ExceptionType::Internal,
                     "the server failed while handling the request",
-                ))
+                );
+                telemetry::error(&error);
+                error_response(&error)
             }
-        }
+        };
+        telemetry::response_bytes(response.len());
+        response
     }
 
     async fn dispatch(&self, body: &[u8]) -> Result<Bytes, ClientError> {
         let header = decode_header(&mut BinaryReader::new(body))
             .map_err(|e| ClientError::invalid_input(format!("Malformed request: {e}")))?;
+        telemetry::request(header.message_type);
         if !server_supports(header.message_type) {
             return Err(ClientError::invalid_input(format!(
                 "Unsupported message type for server: {:?}",
@@ -129,7 +136,11 @@ impl Dispatcher {
                 success()
             }
             (QuackMessage::Disconnect { .. }, Some(session)) => {
-                if self.sessions.remove(&session.info.connection_id).is_none() {
+                if self
+                    .sessions
+                    .remove(&session.info.connection_id, SessionEnd::Disconnect)
+                    .is_none()
+                {
                     return Err(ClientError::invalid_input(
                         "Connection does not exist / already disconnected",
                     ));
@@ -218,6 +229,7 @@ impl Dispatcher {
     ) -> Result<Bytes, ClientError> {
         self.auth.authorize(&session.info, sql).await?;
         tracing::debug!(connection_id = %session.info.connection_id, sql, "prepare");
+        let started = Instant::now();
         let cancel = session.begin(uuid);
         // a cancel stops planning and DDL too: the statement is dropped mid-run
         let prepared = tokio::select! {
@@ -225,17 +237,16 @@ impl Dispatcher {
             () = cancel.cancelled() => Err(ClientError::cancelled()),
             prepared = self.run_prepare(session, sql, uuid, inline_rows, &cancel) => prepared,
         };
-        match prepared {
-            Ok((response, cursor)) => {
-                session.finish(&cancel, cursor)?;
-                Ok(response)
-            }
+        let result = match prepared {
+            Ok((response, cursor)) => session.finish(&cancel, cursor).map(|()| response),
             Err(error) => {
                 // the error is the answer; a FETCH of the statement finds it closed
                 let _ = session.finish(&cancel, None);
                 Err(error)
             }
-        }
+        };
+        telemetry::statement(started.elapsed(), result.as_ref().map(|_| ()));
+        result
     }
 
     /// Runs `sql`, and encodes the PREPARE response with the leading batches inline.

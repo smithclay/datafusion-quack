@@ -31,6 +31,7 @@ use quack_protocol::server::{MessageHeader, MessageType, encode_fetch_response};
 use tokio::sync::watch;
 
 use crate::error::ClientError;
+use crate::telemetry;
 
 /// Cancels a statement. Clones share the signal.
 #[derive(Clone, Debug)]
@@ -248,9 +249,7 @@ impl Cursor {
             };
             let next = running.next().await.and_then(|batch| match batch {
                 Some(batch) => {
-                    self.reservation.try_grow(batch.bytes()).map_err(|e| {
-                        ClientError::from(e).with_context("holding result batches for the client")
-                    })?;
+                    self.hold(batch.bytes())?;
                     Ok(Some(batch))
                 }
                 None => Ok(None),
@@ -290,7 +289,7 @@ impl Cursor {
             let ready = buffers.ready.split_off(&first_kept);
             let served = std::mem::replace(&mut buffers.served, served);
             let ready = std::mem::replace(&mut buffers.ready, ready);
-            self.reservation.shrink(
+            self.release(
                 served.values().map(Bytes::len).sum::<usize>()
                     + ready.values().map(Batch::bytes).sum::<usize>(),
             );
@@ -307,7 +306,8 @@ impl Cursor {
             )?);
             // the response replaces the batch: a header more
             self.reservation.grow(response.len());
-            self.reservation.shrink(batch.bytes());
+            telemetry::held_bytes(response.len() as f64);
+            self.release(batch.bytes());
             buffers.served.insert(request.dense, response.clone());
             return Ok(Some(response));
         }
@@ -334,6 +334,29 @@ impl Cursor {
                 None,
             )?))),
         }
+    }
+}
+
+impl Cursor {
+    /// Reserves `bytes` more for held batches.
+    fn hold(&self, bytes: usize) -> Result<(), ClientError> {
+        self.reservation.try_grow(bytes).map_err(|e| {
+            ClientError::from(e).with_context("holding result batches for the client")
+        })?;
+        telemetry::held_bytes(bytes as f64);
+        Ok(())
+    }
+
+    fn release(&self, bytes: usize) {
+        self.reservation.shrink(bytes);
+        telemetry::held_bytes(-(bytes as f64));
+    }
+}
+
+impl Drop for Cursor {
+    fn drop(&mut self) {
+        // the reservation frees itself; the gauge needs telling
+        telemetry::held_bytes(-(self.reservation.size() as f64));
     }
 }
 

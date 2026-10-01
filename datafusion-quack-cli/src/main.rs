@@ -105,6 +105,10 @@ struct Args {
     /// DataFusion's for the others]
     #[arg(long, value_enum)]
     result_semantics: Option<Semantics>,
+
+    /// Serve Prometheus metrics at http://ADDR/metrics, e.g. `127.0.0.1:9495`.
+    #[arg(long, value_name = "ADDR", env = "QUACK_METRICS_ADDR")]
+    metrics_addr: Option<std::net::SocketAddr>,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -161,6 +165,12 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(address) = args.metrics_addr {
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .with_http_listener(address)
+            .install()?;
+        tracing::info!("serving metrics on http://{address}/metrics");
+    }
     let config = datafusion_quack::duckdb_session_config()
         .with_default_catalog_and_schema(&args.catalog, &args.schema);
     let mut runtime = RuntimeEnvBuilder::new();

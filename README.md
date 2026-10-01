@@ -76,10 +76,29 @@ datafusion-quack [OPTIONS]
   --memory-limit <BYTES>   memory for queries and unread results, e.g. 4G [unlimited]
   --result-semantics <duckdb|datafusion>
                            whose result types sessions get [by client, see below]
+  --metrics-addr <ADDR>    serve Prometheus metrics at http://ADDR/metrics
   --max-sessions, --heartbeat-max, --result-ttl, --inline-rows
 ```
 
 Logging is through `tracing`; set `RUST_LOG=datafusion_quack=debug` to see every query.
+
+## Metrics
+
+With the `metrics` feature, the server reports through the
+[`metrics`](https://docs.rs/metrics) facade; install any recorder (the CLI's
+`--metrics-addr` installs a Prometheus exporter). Without a recorder they cost nothing.
+
+| Metric | Type | Labels |
+|---|---|---|
+| `quack_requests_total` | counter | `message`: connection, prepare, fetch, cancel, heartbeat, … |
+| `quack_errors_total` | counter | `exception`: the DuckDB exception type |
+| `quack_sessions` | gauge | |
+| `quack_sessions_closed_total` | counter | `reason`: disconnect, expired |
+| `quack_statements_total` | counter | `outcome`: ok, error, cancelled |
+| `quack_prepare_seconds` | histogram | |
+| `quack_results_expired_total` | counter | |
+| `quack_result_bytes_held` | gauge | bytes held until the client acknowledges them |
+| `quack_response_bytes_total` | counter | |
 
 ## Crates
 

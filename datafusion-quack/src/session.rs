@@ -16,6 +16,7 @@ use rand::RngCore;
 use crate::auth::{ResultSemantics, SessionInfo};
 use crate::cursor::{CancelHandle, Cursor};
 use crate::error::ClientError;
+use crate::telemetry::{self, SessionEnd};
 use crate::transaction::Transaction;
 
 /// Makes the `SessionContext` each session runs its queries in.
@@ -259,6 +260,7 @@ impl Session {
             && cursor.idle_for(now) >= ttl
         {
             tracing::debug!(connection_id = %self.info.connection_id, "result expired");
+            telemetry::result_expired();
             statement.close(ClientError::invalid_input(
                 "Result has been closed: it was not read for too long",
             ));
@@ -308,6 +310,7 @@ impl SessionStore {
             )));
         }
         sessions.insert(session.info.connection_id.clone(), session);
+        telemetry::sessions(sessions.len());
         Ok(())
     }
 
@@ -321,15 +324,21 @@ impl SessionStore {
         if session.renew(Instant::now()) {
             return Ok(session);
         }
-        self.remove(connection_id);
+        self.remove(connection_id, SessionEnd::Expired);
         Err(ClientError::invalid_input(
             "Connection heartbeat lease expired",
         ))
     }
 
-    pub(crate) fn remove(&self, connection_id: &str) -> Option<Arc<Session>> {
-        let session = self.sessions().remove(connection_id);
+    pub(crate) fn remove(&self, connection_id: &str, reason: SessionEnd) -> Option<Arc<Session>> {
+        let session = {
+            let mut sessions = self.sessions();
+            let session = sessions.remove(connection_id);
+            telemetry::sessions(sessions.len());
+            session
+        };
         if let Some(session) = &session {
+            telemetry::session_closed(reason);
             session.abort("the session ended");
         }
         session
@@ -346,7 +355,7 @@ impl SessionStore {
             .collect();
         for id in expired {
             tracing::debug!(connection_id = %id, "session lease expired");
-            self.remove(&id);
+            self.remove(&id, SessionEnd::Expired);
         }
         if result_ttl.is_zero() {
             return;
@@ -391,7 +400,7 @@ mod tests {
         let store = SessionStore::new(1);
         store.insert(session("a", Duration::from_secs(60))).unwrap();
         assert!(store.insert(session("b", Duration::from_secs(60))).is_err());
-        store.remove("a");
+        store.remove("a", SessionEnd::Disconnect);
         store.insert(session("b", Duration::from_secs(60))).unwrap();
     }
 

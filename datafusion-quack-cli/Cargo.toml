@@ -25,7 +25,8 @@ doc = false
 [dependencies]
 clap = { workspace = true }
 datafusion = { workspace = true, default-features = true }
-datafusion-quack = { workspace = true }
+datafusion-quack = { workspace = true, features = ["metrics"] }
+metrics-exporter-prometheus = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

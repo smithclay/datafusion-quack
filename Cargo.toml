@@ -34,6 +34,9 @@ datafusion = { version = "55.1", default-features = false }
 futures = "0.3"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
+metrics = { version = "0.24", default-features = false }
+metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 proptest = "1"
 # The `server` feature isn't on crates.io yet, so this is a rev of the fork that adds it
 # (upstream PR: bnjjj/quack_protocol_rs#13). `version` is what a published crate will need.
