@@ -38,6 +38,8 @@ pub enum ExceptionType {
     Permission,
     /// `Settings`: a bad configuration option.
     Settings,
+    /// `TransactionContext`: a transaction statement out of place.
+    TransactionContext,
 }
 
 impl ExceptionType {
@@ -58,6 +60,7 @@ impl ExceptionType {
             Self::Parser => "Parser",
             Self::Permission => "Permission",
             Self::Settings => "Settings",
+            Self::TransactionContext => "TransactionContext",
         }
     }
 }

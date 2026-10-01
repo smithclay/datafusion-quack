@@ -113,8 +113,11 @@ all) and adds DuckDB compatibility from `datafusion-quack-catalog`:
   every session, `sum` of integers is `DECIMAL(38,0)` (DuckDB: `HUGEINT`), so it never
   wraps.
 
-`BEGIN`, `COMMIT` and `ROLLBACK` are accepted as no-ops (DataFusion has no
-transactions). DDL and DML run where DataFusion supports them, e.g. on `MemTable`s.
+DataFusion has no transactions: each statement takes effect as it runs. `BEGIN` and
+`COMMIT` are accepted, and `ROLLBACK` succeeds when nothing since `BEGIN` could have
+changed data. After a write it fails with a `TransactionContext` error saying the
+writes were kept, rather than reporting a rollback that didn't happen. DDL and DML run
+where DataFusion supports them, e.g. on `MemTable`s.
 
 ## Compatibility
 

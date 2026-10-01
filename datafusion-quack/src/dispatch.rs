@@ -1,6 +1,6 @@
 //! Request dispatch: one decoded message in, one encoded response out.
 
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use arrow::datatypes::SchemaRef;
@@ -25,6 +25,7 @@ use crate::options::ServerOptions;
 use crate::session::{
     Session, SessionContextProvider, SessionStore, StatementSlot, new_connection_id,
 };
+use crate::transaction::Control;
 
 /// The version this server reports. DuckDB clients only log it.
 pub(crate) const SERVER_VERSION: &str = concat!("datafusion-quack v", env!("CARGO_PKG_VERSION"));
@@ -316,6 +317,16 @@ impl Dispatcher {
         session: &Session,
         statement: Statement,
     ) -> Result<QueryOutput, ClientError> {
+        {
+            let mut transaction = session
+                .transaction
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match Control::of(&statement) {
+                Some(control) => return transaction.apply(control).map(|()| QueryOutput::Success),
+                None => transaction.run(&statement),
+            }
+        }
         for hook in &self.hooks {
             if let Some(output) = hook.handle(&statement, &session.ctx, &session.info).await {
                 return output;

@@ -49,6 +49,7 @@ mod hooks;
 mod http;
 mod options;
 mod session;
+mod transaction;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -59,7 +60,7 @@ use tokio::net::TcpListener;
 pub use auth::{AuthProvider, ConnectionRequest, SessionInfo, TokenAuth};
 pub use datafusion_quack_catalog;
 pub use error::{ClientError, ExceptionType, ServerError};
-pub use hooks::{QueryHook, QueryOutput, TransactionHook};
+pub use hooks::{QueryHook, QueryOutput};
 pub use options::{DEFAULT_PORT, ServerOptions};
 pub use session::{SessionContextProvider, SharedSessionContextProvider};
 
@@ -172,7 +173,8 @@ impl QuackServer {
         self
     }
 
-    /// Adds hooks, which run after the built-in [`TransactionHook`].
+    /// Adds hooks. They run in order, after the server's own handling of `BEGIN`,
+    /// `COMMIT` and `ROLLBACK`.
     pub fn with_hooks(mut self, hooks: Vec<Arc<dyn QueryHook>>) -> Self {
         self.hooks.extend(hooks);
         self
@@ -185,14 +187,12 @@ impl QuackServer {
         if self.options.token().is_none() {
             tracing::warn!("no token is set: every client may connect");
         }
-        let mut hooks: Vec<Arc<dyn QueryHook>> = vec![Arc::new(TransactionHook)];
-        hooks.extend(self.hooks);
         Arc::new(Dispatcher {
             sessions: SessionStore::new(self.options.max_sessions()),
             options: self.options,
             auth,
             provider: self.provider,
-            hooks,
+            hooks: self.hooks,
         })
     }
 

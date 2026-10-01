@@ -16,6 +16,7 @@ use rand::RngCore;
 use crate::auth::SessionInfo;
 use crate::cursor::{CancelHandle, Cursor};
 use crate::error::ClientError;
+use crate::transaction::Transaction;
 
 /// Makes the `SessionContext` each session runs its queries in.
 #[async_trait]
@@ -110,6 +111,7 @@ pub(crate) struct Session {
     running: Mutex<Option<(HugeIntParts, CancelHandle)>>,
     /// Held for the whole of a PREPARE, so a session runs one statement at a time.
     pub(crate) statement: tokio::sync::Mutex<StatementSlot>,
+    pub(crate) transaction: Mutex<Transaction>,
 }
 
 impl Session {
@@ -121,6 +123,7 @@ impl Session {
             lease_renewed: Mutex::new(Instant::now()),
             running: Mutex::new(None),
             statement: tokio::sync::Mutex::new(StatementSlot::default()),
+            transaction: Mutex::new(Transaction::default()),
         }
     }
 

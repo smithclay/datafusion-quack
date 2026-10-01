@@ -193,3 +193,22 @@ async fn shutdown_stops_the_server() {
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn rollback_after_a_write_fails_and_says_the_write_was_kept() {
+    let server = TestServer::start(SessionContext::new(), options()).await;
+    let client = connect(&server).await;
+    values(&client, "CREATE TABLE t (i BIGINT)").await;
+    values(&client, "BEGIN TRANSACTION").await;
+    values(&client, "INSERT INTO t VALUES (1)").await;
+    let error = client.query("ROLLBACK", None).await.err().expect("an error");
+    assert!(error.to_string().contains("are kept"), "{error}");
+    assert_eq!(
+        values(&client, "SELECT count(*) FROM t").await,
+        [[Value::Int(1)]]
+    );
+    // a read-only transaction still commits and rolls back
+    for sql in ["BEGIN", "SELECT 1", "ROLLBACK", "BEGIN", "SELECT 1", "COMMIT"] {
+        values(&client, sql).await;
+    }
+}
