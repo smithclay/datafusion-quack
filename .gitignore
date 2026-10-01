@@ -6,3 +6,6 @@ fuzz/target
 fuzz/corpus
 fuzz/artifacts
 fuzz/Cargo.lock
+
+# agent reference notes, not part of the project
+docs/mvp-plan.md

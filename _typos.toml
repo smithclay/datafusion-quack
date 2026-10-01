@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["docs/mvp-plan.md", "testdata/", "fuzz/seeds/", "*.proptest-regressions", "LICENSE", "Cargo.lock"]
+extend-exclude = ["testdata/", "fuzz/seeds/", "*.proptest-regressions", "LICENSE", "Cargo.lock"]
 
 [default.extend-words]
 # a deliberate syntax error in a test
