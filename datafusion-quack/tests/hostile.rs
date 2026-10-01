@@ -484,3 +484,37 @@ async fn clients_cannot_raise_the_inline_row_limit() {
     assert!(needs_more_fetch);
     assert!(results.iter().map(|c| c.row_count).sum::<usize>() < 100_000);
 }
+
+#[tokio::test]
+async fn a_fetch_of_the_last_result_answers_while_a_new_statement_runs() {
+    let server =
+        TestServer::start(SessionContext::new(), options().with_batch_target_bytes(1)).await;
+    let id = open_session(&server).await;
+    post(
+        &server,
+        prepare_with(&id, 1, "SELECT * FROM range(100000)", 0),
+    )
+    .await;
+    let prepare = tokio::spawn({
+        let url = server.url.clone();
+        let body = prepare_with(
+            &id,
+            2,
+            "CREATE TABLE big AS SELECT value AS v FROM range(10000000000)",
+            0,
+        );
+        async move { post_bytes(&url, body).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // query 2 replaced query 1: the FETCH is refused at once, not after query 2
+    let fetched = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        post(&server, fetch_request(&id, 1, 1)),
+    )
+    .await
+    .expect("FETCH answers while the next statement runs");
+    let message = error_message(fetched);
+    assert!(message.contains("closed"), "{message}");
+    post(&server, cancel_request(&id, 2)).await;
+    prepare.await.unwrap();
+}

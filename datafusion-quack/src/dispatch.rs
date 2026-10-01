@@ -22,15 +22,11 @@ use crate::cursor::{BatchProducer, CancelHandle, Cursor};
 use crate::error::ClientError;
 use crate::hooks::{QueryHook, QueryOutput};
 use crate::options::ServerOptions;
-use crate::session::{
-    Session, SessionContextProvider, SessionStore, StatementSlot, new_connection_id,
-};
+use crate::session::{Session, SessionContextProvider, SessionStore, ZERO_UUID, new_connection_id};
 use crate::transaction::Control;
 
 /// The version this server reports. DuckDB clients only log it.
 pub(crate) const SERVER_VERSION: &str = concat!("datafusion-quack v", env!("CARGO_PKG_VERSION"));
-
-const ZERO_UUID: HugeIntParts = HugeIntParts { upper: 0, lower: 0 };
 
 /// Everything a request needs: configuration, auth, hooks and the sessions.
 #[derive(Debug)]
@@ -121,7 +117,8 @@ impl Dispatcher {
                 .await
             }
             (QuackMessage::CancelRequest { query_uuid, .. }, Some(session)) => {
-                self.cancel(&session, query_uuid).await
+                session.cancel(query_uuid)?;
+                success()
             }
             (
                 QuackMessage::HeartbeatRequest { .. } | QuackMessage::Acknowledgement { .. },
@@ -214,36 +211,52 @@ impl Dispatcher {
         inline_rows: Option<u64>,
     ) -> Result<Bytes, ClientError> {
         self.auth.authorize(&session.info, sql).await?;
-        // stop the previous statement first, so a FETCH it holds lets go of the slot
-        let cancel = session.begin_statement(uuid);
-        let mut slot = session.statement.lock().await;
-        *slot = StatementSlot {
-            uuid: Some(uuid),
-            cursor: None,
-            abort_error: None,
-        };
         tracing::debug!(connection_id = %session.info.connection_id, sql, "prepare");
-
+        let cancel = session.begin(uuid);
         // a cancel stops planning and DDL too: the statement is dropped mid-run
-        let output = tokio::select! {
+        let prepared = tokio::select! {
             biased;
-            () = cancel.cancelled() => return Err(ClientError::cancelled()),
-            output = self.run_sql(session, sql, &cancel) => output?,
+            () = cancel.cancelled() => Err(ClientError::cancelled()),
+            prepared = self.run_prepare(session, sql, uuid, inline_rows, &cancel) => prepared,
         };
-        let (schema, stream) = match output {
-            QueryOutput::Rows(stream) => (stream.schema(), stream),
+        match prepared {
+            Ok((response, cursor)) => {
+                session.finish(&cancel, cursor)?;
+                Ok(response)
+            }
+            Err(error) => {
+                // the error is the answer; a FETCH of the statement finds it closed
+                let _ = session.finish(&cancel, None);
+                Err(error)
+            }
+        }
+    }
+
+    /// Runs `sql`, and encodes the PREPARE response with the leading batches inline.
+    /// Returns the cursor for the rest, if any.
+    async fn run_prepare(
+        &self,
+        session: &Session,
+        sql: &str,
+        uuid: HugeIntParts,
+        inline_rows: Option<u64>,
+        cancel: &CancelHandle,
+    ) -> Result<(Bytes, Option<Arc<Cursor>>), ClientError> {
+        let stream = match self.run_sql(session, sql, cancel).await? {
+            QueryOutput::Rows(stream) => stream,
             QueryOutput::Success => {
-                return Ok(Bytes::from(encode_prepare_response(
+                let response = encode_prepare_response(
                     &MessageHeader::new(MessageType::PrepareResponse),
                     &[LogicalTypes::boolean()],
                     &["Success".to_string()],
                     false,
                     &[] as &[EncodedChunk],
                     uuid,
-                )?));
+                )?;
+                return Ok((Bytes::from(response), None));
             }
         };
-        let (types, names) = result_columns(&schema)?;
+        let (types, names) = result_columns(&stream.schema())?;
         let mut producer =
             BatchProducer::new(stream, cancel.clone(), self.options.batch_target_bytes());
 
@@ -274,17 +287,17 @@ impl Dispatcher {
             (!finished).then_some(producer),
             consumed,
             self.options.max_inflight_batches(),
-            cancel,
+            cancel.clone(),
         );
-        slot.cursor = Some(Arc::new(cursor));
-        Ok(Bytes::from(encode_prepare_response(
+        let response = encode_prepare_response(
             &MessageHeader::new(MessageType::PrepareResponse),
             &types,
             &names,
             !finished,
             &chunks,
             uuid,
-        )?))
+        )?;
+        Ok((Bytes::from(response), Some(Arc::new(cursor))))
     }
 
     /// Parses `sql` and runs its statements. Every statement before the last runs to
@@ -354,40 +367,7 @@ impl Dispatcher {
         batch_index: u64,
         ack_index: u64,
     ) -> Result<Bytes, ClientError> {
-        let cursor = {
-            let slot = session.statement.lock().await;
-            if slot.uuid != Some(uuid) {
-                return Err(ClientError::invalid_input("Result has been closed"));
-            }
-            match (&slot.cursor, &slot.abort_error) {
-                (Some(cursor), _) => Arc::clone(cursor),
-                (None, Some(error)) => return Err(error.clone()),
-                (None, None) => return Err(ClientError::invalid_input("Result has been closed")),
-            }
-        };
-        cursor.fetch(batch_index, ack_index).await
-    }
-
-    async fn cancel(&self, session: &Session, uuid: HugeIntParts) -> Result<Bytes, ClientError> {
-        // check the uuid before stopping anything: a late CANCEL of an earlier query
-        // must not stop the one running now. A zero uuid cancels whatever runs.
-        session
-            .cancel_running(|running| uuid == ZERO_UUID || running == uuid)
-            .map_err(|running| {
-                ClientError::invalid_input(format!(
-                    "Attempted to cancel a different query with id '{uuid}' instead of '{running}'"
-                ))
-            })?;
-        let mut slot = session.statement.lock().await;
-        if uuid != ZERO_UUID && slot.uuid.is_some_and(|current| current != uuid) {
-            return Err(ClientError::invalid_input(format!(
-                "Attempted to cancel a different query with id '{uuid}' instead of '{}'",
-                slot.uuid.unwrap_or(ZERO_UUID)
-            )));
-        }
-        slot.abort(ClientError::cancelled());
-        slot.abort_error.get_or_insert_with(ClientError::cancelled);
-        success()
+        session.cursor(uuid)?.fetch(batch_index, ack_index).await
     }
 }
 

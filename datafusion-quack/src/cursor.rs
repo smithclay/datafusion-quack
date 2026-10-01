@@ -8,10 +8,14 @@
 //! DuckDB fetches ahead: it asks for several batch indices at once. A FETCH for a
 //! later index produces the batches before it and keeps them for their own FETCH,
 //! at most `max_inflight_batches` past the last acknowledged one.
+//!
+//! Two locks: the buffers, held only to look up or file a batch, and the producer,
+//! held while the next batch is computed. A FETCH of a batch already produced never
+//! waits for the stream.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use arrow_quack::{EncodedChunk, encode_record_batch};
@@ -38,6 +42,11 @@ impl CancelHandle {
 
     pub(crate) fn is_cancelled(&self) -> bool {
         *self.0.borrow()
+    }
+
+    /// Whether `other` is a clone of this handle.
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     /// Resolves once the statement is cancelled.
@@ -102,23 +111,18 @@ impl BatchProducer {
     }
 }
 
-/// Where the rest of the result comes from.
-enum Source {
-    Running(BatchProducer),
-    Finished,
-    Failed(ClientError),
-}
-
-struct CursorState {
-    source: Source,
-    /// Batches produced so far, inline ones included (dense indices 1..=produced).
+/// The produced batches, by dense index (inline ones included, from 1).
+struct Buffers {
+    /// Batches produced so far.
     produced: u64,
-    /// The highest dense index the client has acknowledged.
+    /// The highest index the client has acknowledged.
     acked: u64,
     /// Produced batches no FETCH has asked for yet.
     ready: BTreeMap<u64, Batch>,
     /// Served FETCH responses, kept for a retry until acknowledged.
     served: BTreeMap<u64, Bytes>,
+    /// How the stream ended; `None` while it runs.
+    end: Option<Result<(), ClientError>>,
 }
 
 /// A result being fetched.
@@ -130,7 +134,9 @@ pub(crate) struct Cursor {
     last_activity: Mutex<Instant>,
     /// FETCHes in progress.
     fetching: AtomicUsize,
-    state: tokio::sync::Mutex<CursorState>,
+    buffers: Mutex<Buffers>,
+    /// Held while the next batch is produced; `None` once the stream ended.
+    producer: tokio::sync::Mutex<Option<BatchProducer>>,
 }
 
 impl Cursor {
@@ -148,13 +154,14 @@ impl Cursor {
             cancel,
             last_activity: Mutex::new(Instant::now()),
             fetching: AtomicUsize::new(0),
-            state: tokio::sync::Mutex::new(CursorState {
-                source: producer.map_or(Source::Finished, Source::Running),
+            buffers: Mutex::new(Buffers {
                 produced: prepare_batches,
                 acked: prepare_batches,
                 ready: BTreeMap::new(),
                 served: BTreeMap::new(),
+                end: producer.is_none().then_some(Ok(())),
             }),
+            producer: tokio::sync::Mutex::new(producer),
         }
     }
 
@@ -181,6 +188,10 @@ impl Cursor {
             .unwrap_or_else(PoisonError::into_inner) = Instant::now();
     }
 
+    fn buffers(&self) -> MutexGuard<'_, Buffers> {
+        self.buffers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Answers a FETCH for client batch `batch_index`, acknowledging everything up to
     /// `ack_index`.
     pub(crate) async fn fetch(
@@ -198,74 +209,106 @@ impl Cursor {
         self.fetching.fetch_add(1, Ordering::AcqRel);
         let _fetching = scopeguard(|| {
             self.fetching.fetch_sub(1, Ordering::AcqRel);
+            self.touch();
         });
-        let dense = batch_index.saturating_add(self.prepare_batches);
-        let dense_ack = ack_index.saturating_add(self.prepare_batches);
-
-        let mut state = self.state.lock().await;
-        if dense_ack > state.produced {
-            // an ack of batches never sent would let the read-ahead limit run unbounded
-            return Err(ClientError::invalid_input(format!(
-                "FETCH acknowledges batch {ack_index}, which hasn't been sent"
-            )));
+        let request = Request {
+            dense: batch_index.saturating_add(self.prepare_batches),
+            dense_ack: ack_index.saturating_add(self.prepare_batches),
+            batch_index,
+            ack_index,
+        };
+        if let Some(response) = self.answer(&request)? {
+            return Ok(response);
         }
-        if dense_ack > state.acked {
-            state.acked = dense_ack;
-            state.served = state.served.split_off(&(dense_ack + 1));
-            state.ready = state.ready.split_off(&(dense_ack + 1));
-        }
-        if let Some(response) = state.served.get(&dense) {
-            return Ok(response.clone());
-        }
-        if let Some(batch) = state.ready.remove(&dense) {
-            return serve(&mut state, dense, batch_index, batch);
-        }
-        if dense <= state.produced {
-            return Err(ClientError::invalid_input(format!(
-                "Batch {batch_index} was already acknowledged"
-            )));
-        }
-        let running = matches!(state.source, Source::Running(_));
-        if running && dense.saturating_sub(state.acked) > self.max_inflight_batches {
-            return Err(ClientError::invalid_input(format!(
-                "FETCH of batch {batch_index} is more than {} batches past the last acknowledged one",
-                self.max_inflight_batches
-            )));
-        }
-
-        while state.produced < dense {
-            let Source::Running(producer) = &mut state.source else {
-                break;
-            };
-            match producer.next().await {
-                Ok(Some(batch)) => {
-                    state.produced += 1;
-                    let index = state.produced;
-                    if index == dense {
-                        self.touch();
-                        return serve(&mut state, dense, batch_index, batch);
-                    }
-                    state.ready.insert(index, batch);
-                }
-                Ok(None) => state.source = Source::Finished,
-                Err(error) => state.source = Source::Failed(error),
+        // produce up to the batch; another FETCH may produce it first
+        let mut producer = self.producer.lock().await;
+        loop {
+            if let Some(response) = self.answer(&request)? {
+                return Ok(response);
             }
-        }
-        self.touch();
-        match &state.source {
-            Source::Failed(error) => Err(error.clone()),
-            _ => {
-                // the stream ended below this index
-                let total = state.produced - self.prepare_batches;
-                Ok(Bytes::from(encode_fetch_response(
-                    &MessageHeader::new(MessageType::FetchResponse),
-                    &[] as &[EncodedChunk],
-                    Some(total),
-                    None,
-                )?))
+            let Some(running) = producer.as_mut() else {
+                // the stream ended (answer reports it), so this can't be reached
+                return Err(ClientError::invalid_input("Result has been closed"));
+            };
+            let next = running.next().await;
+            let mut buffers = self.buffers();
+            match next {
+                Ok(Some(batch)) => {
+                    buffers.produced += 1;
+                    let index = buffers.produced;
+                    buffers.ready.insert(index, batch);
+                }
+                Ok(None) => buffers.end = Some(Ok(())),
+                Err(error) => buffers.end = Some(Err(error)),
+            }
+            if buffers.end.is_some() {
+                *producer = None;
             }
         }
     }
+
+    /// Answers `request` from the buffers, or `None` when its batch is yet to be
+    /// produced.
+    fn answer(&self, request: &Request) -> Result<Option<Bytes>, ClientError> {
+        let mut buffers = self.buffers();
+        let buffers = &mut *buffers;
+        if request.dense_ack > buffers.produced {
+            // an ack of batches never sent would let the read-ahead limit run unbounded
+            return Err(ClientError::invalid_input(format!(
+                "FETCH acknowledges batch {}, which hasn't been sent",
+                request.ack_index
+            )));
+        }
+        if request.dense_ack > buffers.acked {
+            buffers.acked = request.dense_ack;
+            buffers.served = buffers.served.split_off(&(request.dense_ack + 1));
+            buffers.ready = buffers.ready.split_off(&(request.dense_ack + 1));
+        }
+        if let Some(response) = buffers.served.get(&request.dense) {
+            return Ok(Some(response.clone()));
+        }
+        if let Some(batch) = buffers.ready.remove(&request.dense) {
+            let response = Bytes::from(encode_fetch_response(
+                &MessageHeader::new(MessageType::FetchResponse),
+                &batch.chunks,
+                None,
+                Some(request.batch_index),
+            )?);
+            buffers.served.insert(request.dense, response.clone());
+            return Ok(Some(response));
+        }
+        if request.dense <= buffers.produced {
+            return Err(ClientError::invalid_input(format!(
+                "Batch {} was already acknowledged",
+                request.batch_index
+            )));
+        }
+        match &buffers.end {
+            None if request.dense.saturating_sub(buffers.acked) > self.max_inflight_batches => {
+                Err(ClientError::invalid_input(format!(
+                    "FETCH of batch {} is more than {} batches past the last acknowledged one",
+                    request.batch_index, self.max_inflight_batches
+                )))
+            }
+            None => Ok(None),
+            Some(Err(error)) => Err(error.clone()),
+            // the stream ended below this index
+            Some(Ok(())) => Ok(Some(Bytes::from(encode_fetch_response(
+                &MessageHeader::new(MessageType::FetchResponse),
+                &[] as &[EncodedChunk],
+                Some(buffers.produced - self.prepare_batches),
+                None,
+            )?))),
+        }
+    }
+}
+
+/// A FETCH, with its indices in the client's numbering and the dense one.
+struct Request {
+    dense: u64,
+    dense_ack: u64,
+    batch_index: u64,
+    ack_index: u64,
 }
 
 /// Runs `f` when dropped, so it runs however the FETCH ends (an early return, an
@@ -280,22 +323,6 @@ fn scopeguard(f: impl FnOnce()) -> impl Drop {
         }
     }
     Guard(Some(f))
-}
-
-fn serve(
-    state: &mut CursorState,
-    dense: u64,
-    batch_index: u64,
-    batch: Batch,
-) -> Result<Bytes, ClientError> {
-    let response = Bytes::from(encode_fetch_response(
-        &MessageHeader::new(MessageType::FetchResponse),
-        &batch.chunks,
-        None,
-        Some(batch_index),
-    )?);
-    state.served.insert(dense, response.clone());
-    Ok(response)
 }
 
 #[cfg(test)]
@@ -426,6 +453,33 @@ mod tests {
         fetching.abort();
         let _ = fetching.await;
         assert!(cursor.idle_for(later) > std::time::Duration::from_secs(3000));
+    }
+
+    #[tokio::test]
+    async fn a_retry_answers_while_the_next_batch_is_produced() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, false)]));
+        let first = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1i64; 10]))],
+        )
+        .unwrap();
+        // one batch, then a stream that never yields another
+        let stream = futures::stream::iter([Ok(first)]).chain(futures::stream::pending());
+        let stream = RecordBatchStreamAdapter::new(schema, stream);
+        let cancel = CancelHandle::new();
+        let producer = BatchProducer::new(Box::pin(stream), cancel.clone(), 1);
+        let cursor = Arc::new(Cursor::new(Some(producer), 0, 4, cancel));
+        let first = cursor.fetch(1, 0).await.unwrap();
+        let producing = tokio::spawn({
+            let cursor = Arc::clone(&cursor);
+            async move { cursor.fetch(2, 0).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let retried = tokio::time::timeout(std::time::Duration::from_secs(1), cursor.fetch(1, 0))
+            .await
+            .expect("a retry doesn't wait for the next batch");
+        assert_eq!(retried.unwrap(), first);
+        producing.abort();
     }
 
     #[tokio::test]
