@@ -7,7 +7,7 @@ members = [
     "datafusion-quack-cli",
 ]
 # the integration runner checks other repositories out under .cache
-exclude = ["tests-integration/.cache", "fuzz"]
+exclude = ["tests-integration/.cache", "fuzz", "examples/ducklake"]
 
 [workspace.package]
 version = "0.1.0"

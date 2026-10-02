@@ -1,6 +1,10 @@
 [files]
 extend-exclude = ["testdata/", "fuzz/seeds/", "*.proptest-regressions", "LICENSE", "Cargo.lock"]
 
+[default]
+# dyld's error message, quoted verbatim in examples/ducklake/README.md
+extend-ignore-re = ["mis-aligned LINKEDIT"]
+
 [default.extend-words]
 # a deliberate syntax error in a test
 SELEC = "SELEC"

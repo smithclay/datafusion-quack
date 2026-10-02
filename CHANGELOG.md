@@ -16,3 +16,12 @@ entries for each release.
   DuckDB type names, DuckDB name resolution, functions and result types.
 - `datafusion-quack-cli`: the `datafusion-quack` command, serving CSV, Parquet and
   JSON files.
+- `datafusion-quack-catalog`: `CatalogListing`, so `ATTACH` lists a catalog's tables
+  without opening each one.
+- `examples/ducklake`: serving a DuckLake catalog to DuckDB.
+
+### Fixed
+
+- `datafusion-quack-catalog`: DuckDB's `information_schema` replaces a catalog's own.
+- `arrow-quack`: names that are DuckDB `type_function` keywords (`inner`, `left`, …) are
+  quoted, so a column or struct field with one no longer breaks `ATTACH`.

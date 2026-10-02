@@ -18,6 +18,7 @@ use datafusion::datasource::TableType;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::session_state::SessionState;
 
+use crate::listing::CatalogListings;
 use crate::table::ComputedTable;
 use crate::types::{column_type_name, create_table_sql, numeric_precision, qualified_name};
 use crate::walk;
@@ -189,10 +190,13 @@ impl TableFunctionImpl for DuckDbCatalogFunction {
         Ok(Arc::new(ComputedTable::new(
             function.name(),
             function.schema(),
-            move |schema| {
+            move |schema, session| {
                 let list = Arc::clone(&list);
                 let oids = Arc::clone(&oids);
-                Box::pin(async move { compute(function, list.as_ref(), &oids, schema).await })
+                let listings = session.config().get_extension::<CatalogListings>();
+                Box::pin(async move {
+                    compute(function, list.as_ref(), listings.as_deref(), &oids, schema).await
+                })
             },
         )))
     }
@@ -246,6 +250,7 @@ fn boolean(value: bool) -> ScalarValue {
 async fn compute(
     function: CatalogFunction,
     list: &dyn CatalogProviderList,
+    listings: Option<&CatalogListings>,
     oids: &OidRegistry,
     schema: SchemaRef,
 ) -> Result<RecordBatch> {
@@ -303,26 +308,23 @@ async fn compute(
             }
         }
         CatalogFunction::Tables | CatalogFunction::Views => {
-            for table in walk::tables(list).await? {
-                let table_type = table.provider.table_type();
+            for table in walk::tables(list, listings).await? {
+                let table_type = table.table_type;
                 let is_view = table_type == TableType::View;
                 if is_view != (function == CatalogFunction::Views) {
                     continue;
                 }
-                let table_schema = table.provider.schema();
+                let table_schema = Arc::clone(&table.columns);
                 let located = located(&table);
                 let column_count = int64(table_schema.fields().len() as i64);
                 if is_view {
-                    let sql = table.provider.get_table_definition().map_or_else(
-                        || {
-                            format!(
-                                "CREATE VIEW {} AS SELECT * FROM {};",
-                                qualified_name(&table.schema, &table.name),
-                                qualified_name(&table.schema, &table.name)
-                            )
-                        },
-                        str::to_string,
-                    );
+                    let sql = table.definition.clone().unwrap_or_else(|| {
+                        format!(
+                            "CREATE VIEW {} AS SELECT * FROM {};",
+                            qualified_name(&table.schema, &table.name),
+                            qualified_name(&table.schema, &table.name)
+                        )
+                    });
                     rows.push(
                         [
                             located,
@@ -367,8 +369,8 @@ async fn compute(
             }
         }
         CatalogFunction::Columns => {
-            for table in walk::tables(list).await? {
-                for (index, field) in table.provider.schema().fields().iter().enumerate() {
+            for table in walk::tables(list, listings).await? {
+                for (index, field) in table.columns.fields().iter().enumerate() {
                     let (precision, radix, scale) = numeric_precision(field.data_type());
                     let type_id = arrow_quack::arrow_to_logical_type(field.data_type())
                         .ok()
