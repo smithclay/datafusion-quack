@@ -23,6 +23,9 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::{CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext};
 use datafusion_quack::{QuackServer, ResultSemantics, ServerOptions};
 use datafusion_quack_cli::seed;
+
+mod read_only;
+use read_only::ReadOnlyFile;
 use tracing_subscriber::EnvFilter;
 
 /// Serve CSV, Parquet and JSON files to DuckDB clients over the Quack protocol.
@@ -300,12 +303,62 @@ async fn register_file(
         }
         _ => return Ok(false),
     }
+    // served as read, never written: wrap it so writes say how to copy it instead
+    if let Some(table) = ctx.deregister_table(name)? {
+        ctx.register_table(name, Arc::new(ReadOnlyFile::new(name, path, table)))?;
+    }
     Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn file_tables_refuse_writes_and_say_how_to_copy_them() {
+        let dir = std::env::temp_dir().join(format!("quack-read-only-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("people.csv");
+        std::fs::write(&file, "id,name\n1,a\n").unwrap();
+        let ctx = SessionContext::new();
+        assert!(
+            register_file(&ctx, "csv", "people", &file.to_string_lossy())
+                .await
+                .unwrap()
+        );
+
+        for sql in [
+            "INSERT INTO people VALUES (2, 'b')",
+            "DELETE FROM people WHERE id = 1",
+            "UPDATE people SET name = 'z'",
+        ] {
+            let result = async { ctx.sql(sql).await?.collect().await }.await;
+            let error = result.expect_err(sql).to_string();
+            assert!(error.contains("CREATE TABLE"), "{sql}: {error}");
+        }
+        // reads still work, the file is unchanged, and a copy is writable
+        let count = |sql: &'static str| {
+            let ctx = ctx.clone();
+            async move {
+                let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+                datafusion::arrow::util::display::array_value_to_string(batches[0].column(0), 0)
+                    .unwrap()
+            }
+        };
+        assert_eq!(count("SELECT count(*) FROM people").await, "1");
+        ctx.sql("CREATE TABLE mine AS SELECT * FROM people")
+            .await
+            .unwrap();
+        ctx.sql("INSERT INTO mine VALUES (2, 'b')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(count("SELECT count(*) FROM mine").await, "2");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "id,name\n1,a\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn byte_counts_take_binary_suffixes() {

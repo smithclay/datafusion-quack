@@ -81,6 +81,16 @@ datafusion-quack [OPTIONS]
   --max-sessions, --heartbeat-max, --result-ttl, --inline-rows
 ```
 
+The command behaves like an in-memory DuckDB with files to read. Tables clients create
+(`CREATE TABLE`, `CREATE TABLE … AS`) live in memory, shared by every client, and take
+`INSERT`, `UPDATE` and `DELETE`; they are gone when the server stops. Files given on
+the command line are read in place, on every query, and never changed: a write to one
+is refused with a hint to copy it first, as in DuckDB:
+
+```sql
+CREATE TABLE df.my_trips AS SELECT * FROM df.trips;   -- a writable copy in memory
+```
+
 Logging is through `tracing`; set `RUST_LOG=datafusion_quack=debug` to see every query.
 
 ## Metrics

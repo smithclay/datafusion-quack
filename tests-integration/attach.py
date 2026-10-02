@@ -21,6 +21,15 @@ def run(args, sql):
         raise AssertionError(f"{sql}: {error}") from error
 
 
+def fails(args, sql):
+    """Runs `sql`, which must fail; returns DuckDB's error message."""
+    try:
+        run(args, sql)
+    except AssertionError as error:
+        return str(error)
+    raise AssertionError(f"{sql}: expected an error")
+
+
 def check(name, actual, expected):
     if actual != expected:
         raise AssertionError(f"{name}:\n  expected {expected}\n  got      {actual}")
@@ -81,6 +90,29 @@ def main():
 
     rows = run(args, "BEGIN; SELECT count(*) AS n FROM df.quack_ext_a; COMMIT;")
     check("explicit transaction", rows, [{"n": 3}])
+
+    # writes: DuckDB rewrites these before sending them (INSERT ... (VALUES ...))
+    run(args, "CREATE TABLE df.attach_writes (id INTEGER, name VARCHAR)")
+    run(args, "INSERT INTO df.attach_writes VALUES (1, 'a'), (2, 'b')")
+    run(args, "INSERT INTO df.attach_writes (name, id) VALUES ('c', 3)")
+    run(args, "INSERT INTO df.attach_writes SELECT id + 10, name FROM df.attach_writes WHERE id = 1")
+    run(args, "UPDATE df.attach_writes SET name = 'z' WHERE id = 1")
+    run(args, "DELETE FROM df.attach_writes WHERE id = 2")
+    rows = run(args, "FROM df.attach_writes ORDER BY id")
+    check("insert, update and delete", rows,
+          [{"id": 1, "name": "z"}, {"id": 3, "name": "c"}, {"id": 11, "name": "a"}])
+    run(args, "CREATE TABLE df.attach_copy AS SELECT * FROM df.attach_file")
+    run(args, "INSERT INTO df.attach_copy VALUES (2, 'copy')")
+    rows = run(args, "SELECT count(*) AS n FROM df.attach_copy")
+    check("a writable copy of a file table", rows, [{"n": 2}])
+    error = fails(args, "INSERT INTO df.attach_file VALUES (2, 'b')")
+    if "CREATE TABLE" not in error:
+        raise AssertionError(f"a write to a file table should say how to copy it: {error}")
+    print("ok   writes to a file table are refused")
+    rows = run(args, "SELECT count(*) AS n FROM df.attach_file")
+    check("the file table is unchanged", rows, [{"n": 1}])
+    # the provider suite uses this server next
+    run(args, "DROP TABLE df.attach_writes; DROP TABLE df.attach_copy")
     return 0
 
 

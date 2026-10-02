@@ -100,7 +100,10 @@ start_server() {
     wait_for "$url"
 }
 
-start_server seeded "http://127.0.0.1:$SEEDED_PORT/" --port "$SEEDED_PORT" --seed provider-fixtures
+# a file table, for attach.py's check that writes to one are refused
+printf 'id,name\n1,a\n' > "$OUT/attach_file.csv"
+start_server seeded "http://127.0.0.1:$SEEDED_PORT/" --port "$SEEDED_PORT" --seed provider-fixtures \
+    --csv "attach_file:$OUT/attach_file.csv"
 
 # --- 1. DuckDB ATTACH and the differential test ----------------------------------
 

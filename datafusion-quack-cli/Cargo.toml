@@ -23,6 +23,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+async-trait = { workspace = true }
 clap = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 datafusion-quack = { workspace = true, features = ["metrics"] }
