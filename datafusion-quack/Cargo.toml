@@ -44,7 +44,7 @@ tracing = { workspace = true }
 datafusion = { workspace = true, features = ["sql", "nested_expressions", "string_expressions", "unicode_expressions", "datetime_expressions", "math_expressions"] }
 quack_protocol = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["test-util"] }
-reqwest = { version = "0.12", default-features = false }
+reqwest = { version = "0.13", default-features = false }
 proptest = { workspace = true }
 metrics-util = { workspace = true }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
