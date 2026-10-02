@@ -1,0 +1,27 @@
+[package]
+name = "datafusion-quack-ducklake-example"
+version = "0.0.0"
+publish = false
+edition = "2024"
+description = "Serve a DuckLake catalog over the Quack protocol"
+
+[dependencies]
+async-trait = "0.1"
+datafusion = { version = "55.1", default-features = false, features = ["sql", "nested_expressions"] }
+datafusion-ducklake = { path = "../../../datafusion-ducklake", features = ["write-sqlite"] }
+datafusion-quack = { path = "../../datafusion-quack" }
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "signal"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "ducklake-quack"
+path = "src/main.rs"
+
+# Release builds strip proc-macro dylibs, and before Rust 1.98.1 the stripped
+# dylib's string pool is misaligned, which macOS 27's dyld refuses to load.
+[profile.release.build-override]
+strip = false
+
+# not part of the main workspace: it pulls in datafusion-ducklake and its sqlx
+# backend, which the server's crates don't need
+[workspace]
