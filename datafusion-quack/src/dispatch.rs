@@ -7,7 +7,7 @@ use arrow::datatypes::SchemaRef;
 use arrow_quack::{EncodedChunk, arrow_to_logical_type};
 use bytes::Bytes;
 use datafusion::execution::memory_pool::MemoryConsumer;
-use datafusion::sql::parser::{DFParserBuilder, Statement};
+use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::dialect::{Dialect, dialect_from_str};
 use std::panic::AssertUnwindSafe;
 
@@ -414,11 +414,7 @@ fn parse(
         .to_string();
     let dialect: Box<dyn Dialect> = dialect_from_str(&dialect_name)
         .ok_or_else(|| ClientError::invalid_input(format!("unknown SQL dialect {dialect_name}")))?;
-    DFParserBuilder::new(sql)
-        .with_dialect(dialect.as_ref())
-        .build()
-        .and_then(|mut parser| parser.parse_statements())
-        .map_err(ClientError::from)
+    crate::parse::parse(dialect.as_ref(), sql).map_err(ClientError::from)
 }
 
 fn server_supports(message_type: MessageType) -> bool {

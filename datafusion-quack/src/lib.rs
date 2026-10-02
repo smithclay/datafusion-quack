@@ -48,6 +48,7 @@ pub mod fuzzing;
 mod hooks;
 mod http;
 mod options;
+mod parse;
 mod session;
 mod telemetry;
 mod transaction;

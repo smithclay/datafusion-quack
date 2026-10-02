@@ -270,3 +270,35 @@ async fn sql_options_can_make_the_server_read_only() {
         [[Value::Int(1)]]
     );
 }
+
+/// The write statements DuckDB's ATTACH sends, recorded from DuckDB 2.0 alpha with
+/// the quack extension `974927a394`.
+#[tokio::test]
+async fn writes_as_duckdb_attach_sends_them() {
+    let server = TestServer::start(SessionContext::new(), options()).await;
+    let client = connect(&server).await;
+    for sql in [
+        r#"CREATE TABLE t(id INTEGER, "name" VARCHAR);"#,
+        "INSERT INTO t (VALUES (1, 'a'))",
+        r#"INSERT INTO t (id, "name") (VALUES (2, 'b'))"#,
+        r#"INSERT INTO t ("name", id) (VALUES ('c', 3))"#,
+        "INSERT INTO t SELECT 9, 'local'",
+        r#"UPDATE t SET "name" = 'z' WHERE (id = 1)"#,
+        "DELETE FROM t WHERE (id = 2)",
+        "CREATE TABLE c AS SELECT * FROM t",
+        "CREATE SCHEMA s2;",
+        "CREATE VIEW v AS SELECT 1 AS x;",
+        "DROP TABLE c;",
+    ] {
+        client.execute(sql, None).await.expect(sql);
+    }
+    assert_eq!(
+        values(&client, "SELECT id, name FROM t ORDER BY id").await,
+        [
+            vec![Value::Int(1), Value::String("z".into())],
+            vec![Value::Int(3), Value::String("c".into())],
+            vec![Value::Int(9), Value::String("local".into())],
+        ]
+    );
+    assert_eq!(values(&client, "SELECT x FROM v").await, [[Value::Int(1)]]);
+}
