@@ -6,6 +6,13 @@ entries for each release.
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/smithclay/datafusion-quack/releases/tag/arrow-quack-v0.1.0) - 2026-10-02
+
+### Added
+
+- serve a DuckLake catalog; list catalogs for ATTACH without opening each table ([#5](https://github.com/smithclay/datafusion-quack/pull/5))
+- serve DataFusion over DuckDB's Quack protocol ([#1](https://github.com/smithclay/datafusion-quack/pull/1))
+
 ### Added
 
 - `datafusion-quack`: a Quack protocol v3 server for a DataFusion `SessionContext`:
