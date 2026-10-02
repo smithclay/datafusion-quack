@@ -1,0 +1,30 @@
+[package]
+name = "arrow-quack"
+description = "Arrow to DuckDB DataChunk encoding for the Quack protocol"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+quack_protocol = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+indexmap = "2"
+criterion = { version = "0.7", default-features = false }
+
+[[bench]]
+name = "encode"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+[files]
+extend-exclude = ["testdata/", "fuzz/seeds/", "*.proptest-regressions", "LICENSE", "Cargo.lock"]
+
+[default.extend-words]
+# a deliberate syntax error in a test
+SELEC = "SELEC"
