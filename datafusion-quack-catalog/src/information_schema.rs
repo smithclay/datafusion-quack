@@ -14,6 +14,7 @@ use datafusion::catalog::information_schema::InformationSchemaProvider;
 use datafusion::catalog::{CatalogProviderList, SchemaProvider, TableProvider};
 use datafusion::error::Result;
 
+use crate::listing::CatalogListings;
 use crate::table::ComputedTable;
 use crate::types::{column_type_name, numeric_precision};
 use crate::walk;
@@ -82,14 +83,19 @@ fn columns_table(list: Arc<dyn CatalogProviderList>) -> ComputedTable {
     ComputedTable::new(
         "information_schema.columns",
         columns_schema(),
-        move |schema| {
+        move |schema, session| {
             let list = Arc::clone(&list);
-            Box::pin(async move { columns(list.as_ref(), schema).await })
+            let listings = session.config().get_extension::<CatalogListings>();
+            Box::pin(async move { columns(list.as_ref(), listings.as_deref(), schema).await })
         },
     )
 }
 
-async fn columns(list: &dyn CatalogProviderList, schema: SchemaRef) -> Result<RecordBatch> {
+async fn columns(
+    list: &dyn CatalogProviderList,
+    listings: Option<&CatalogListings>,
+    schema: SchemaRef,
+) -> Result<RecordBatch> {
     let mut catalogs = StringBuilder::new();
     let mut schemas = StringBuilder::new();
     let mut tables = StringBuilder::new();
@@ -102,8 +108,8 @@ async fn columns(list: &dyn CatalogProviderList, schema: SchemaRef) -> Result<Re
     let mut scales = UInt64Builder::new();
 
     let mut rows = 0;
-    for table in walk::tables(list).await? {
-        for (index, field) in table.provider.schema().fields().iter().enumerate() {
+    for table in walk::tables(list, listings).await? {
+        for (index, field) in table.columns.fields().iter().enumerate() {
             catalogs.append_value(&table.catalog);
             schemas.append_value(&table.schema);
             tables.append_value(&table.name);

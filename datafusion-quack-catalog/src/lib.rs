@@ -37,6 +37,7 @@
 mod duckdb_functions;
 mod functions;
 mod information_schema;
+mod listing;
 mod names;
 mod semantics;
 mod table;
@@ -51,6 +52,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 
 use functions::{CatalogFunction, DuckDbCatalogFunction, OidRegistry};
+pub use listing::{CatalogListing, CatalogListings, ListedTable};
 pub use names::DuckDbCatalogList;
 pub use semantics::duckdb_client_semantics;
 use semantics::wide_sum_udaf;

@@ -3,8 +3,8 @@
 //! DuckDB matches names case-insensitively, quoted or not, so a client may ask for
 //! `"mixedcase"` when the table is `MixedCase`. These wrappers look a name up
 //! exactly first, then case-insensitively when exactly one entry matches. They also
-//! give every catalog an `information_schema` with DuckDB type names (see
-//! [`crate::information_schema`]).
+//! give every catalog an `information_schema` with DuckDB type names, in place of any
+//! the catalog has (see [`crate::information_schema`]).
 
 use std::sync::{Arc, Weak};
 
@@ -98,19 +98,17 @@ impl CatalogProvider for DuckDbCatalog {
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        let found = self.inner.schema(name).or_else(|| {
-            self.inner
-                .schema(&resolve(name, &self.inner.schema_names())?)
-        });
-        if let Some(inner) = found {
-            return Some(Arc::new(DuckDbSchema { inner }));
-        }
+        // DuckDB's, even over a catalog's own: DuckDB clients read its columns
         if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
             return Some(Arc::new(DuckDbInformationSchema::new(Arc::clone(
                 &self.list,
             ))));
         }
-        None
+        let inner = self.inner.schema(name).or_else(|| {
+            self.inner
+                .schema(&resolve(name, &self.inner.schema_names())?)
+        })?;
+        Some(Arc::new(DuckDbSchema { inner }))
     }
 
     fn register_schema(
