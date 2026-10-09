@@ -41,7 +41,7 @@ proptest = "1"
 # The `server` feature isn't on crates.io yet, so this is a rev of the fork that adds it
 # (upstream PR: bnjjj/quack_protocol_rs#13). `version` is what a published crate will need.
 quack_protocol = { version = "0.3", git = "https://github.com/smithclay/quack_protocol_rs", rev = "5b9317672418f4f36a0285e06230afac8849c925", default-features = false, features = ["server"] }
-rand = "0.9"
+rand = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 subtle = "2"
 thiserror = "2"
